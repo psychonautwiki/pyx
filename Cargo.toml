@@ -6,6 +6,8 @@ rust-version = "1.85"
 description = "High-performance reverse proxy with h2o configuration compatibility"
 license = "MIT"
 authors = ["styx Authors"]
+repository = "https://github.com/psychonautwiki/styx"
+readme = "README.md"
 
 [dependencies]
 # Async runtime
