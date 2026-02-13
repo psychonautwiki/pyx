@@ -27,11 +27,7 @@ fn parse_upstream_url(upstream: &str, request_uri: &Uri) -> Result<String, &'sta
     } else if request_path.starts_with(upstream_path) {
         request_path.to_string()
     } else {
-        format!(
-            "{}{}",
-            upstream_path.trim_end_matches('/'),
-            request_path
-        )
+        format!("{}{}", upstream_path.trim_end_matches('/'), request_path)
     };
 
     let query = request_uri
@@ -83,7 +79,9 @@ fn bench_parse_upstream_url(c: &mut Criterion) {
 
     // Complex wiki-style path
     group.bench_function("wiki_style", |b| {
-        let uri: Uri = "/w/index.php?title=Main_Page&action=render".parse().unwrap();
+        let uri: Uri = "/w/index.php?title=Main_Page&action=render"
+            .parse()
+            .unwrap();
         b.iter(|| parse_upstream_url(black_box("http://varnish:80"), black_box(&uri)))
     });
 
@@ -209,7 +207,10 @@ fn bench_remove_hop_headers(c: &mut Criterion) {
                 headers.insert("connection", HeaderValue::from_static("keep-alive"));
                 headers.insert("keep-alive", HeaderValue::from_static("timeout=5"));
                 headers.insert("proxy-authenticate", HeaderValue::from_static("Basic"));
-                headers.insert("proxy-authorization", HeaderValue::from_static("Basic creds"));
+                headers.insert(
+                    "proxy-authorization",
+                    HeaderValue::from_static("Basic creds"),
+                );
                 headers.insert("te", HeaderValue::from_static("trailers"));
                 headers.insert("trailers", HeaderValue::from_static(""));
                 headers.insert("transfer-encoding", HeaderValue::from_static("chunked"));
@@ -477,12 +478,7 @@ fn bench_apply_header_rules(c: &mut Criterion) {
         };
 
         b.iter_batched(
-            || {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(())
-                    .unwrap()
-            },
+            || Response::builder().status(StatusCode::OK).body(()).unwrap(),
             |mut response| {
                 apply_response_headers(black_box(&mut response), black_box(&rules));
                 response
@@ -495,7 +491,7 @@ fn bench_apply_header_rules(c: &mut Criterion) {
     group.bench_function("complex_mixed", |b| {
         let rules = HeaderRules {
             set: vec![
-                ("X-Server".to_string(), "styx".to_string()),
+                ("X-Server".to_string(), "pyx".to_string()),
                 ("Surrogate-Key".to_string(), "main api".to_string()),
             ],
             set_if_empty: vec![

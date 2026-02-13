@@ -1,4 +1,4 @@
-//! Configuration module for styx reverse proxy
+//! Configuration module for pyx reverse proxy
 //!
 //! This module handles parsing and representing h2o-compatible configuration.
 
@@ -178,7 +178,7 @@ impl Default for HealthConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    /// User to run as (informational, not enforced by styx)
+    /// User to run as (informational, not enforced by pyx)
     #[serde(default)]
     pub user: Option<String>,
 
@@ -267,7 +267,10 @@ pub struct Config {
     pub proxy_timeout_io: u64,
 
     /// Proxy keepalive timeout in milliseconds
-    #[serde(default = "default_proxy_timeout_keepalive", rename = "proxy.timeout.keepalive")]
+    #[serde(
+        default = "default_proxy_timeout_keepalive",
+        rename = "proxy.timeout.keepalive"
+    )]
     pub proxy_timeout_keepalive: u64,
 
     /// Duration stats
@@ -384,7 +387,10 @@ impl<'de> Deserialize<'de> for OnOff {
         match s.to_uppercase().as_str() {
             "ON" | "TRUE" | "YES" | "1" => Ok(OnOff::On),
             "OFF" | "FALSE" | "NO" | "0" => Ok(OnOff::Off),
-            _ => Err(serde::de::Error::custom(format!("invalid on/off value: {}", s))),
+            _ => Err(serde::de::Error::custom(format!(
+                "invalid on/off value: {}",
+                s
+            ))),
         }
     }
 }
@@ -834,7 +840,9 @@ impl HeaderRules {
 
         // For set, set_if_empty, and unset: simple extend is fine since they override/remove
         result.set.extend(other.set.iter().cloned());
-        result.set_if_empty.extend(other.set_if_empty.iter().cloned());
+        result
+            .set_if_empty
+            .extend(other.set_if_empty.iter().cloned());
         result.unset.extend(other.unset.iter().cloned());
 
         // For merge: deduplicate by header name to prevent cumulative merging
@@ -844,20 +852,23 @@ impl HeaderRules {
 
         // Collect all merge rules from self
         for (name, value) in &result.merge {
-            merge_map.entry(name.clone())
+            merge_map
+                .entry(name.clone())
                 .or_insert_with(Vec::new)
                 .push(value.clone());
         }
 
         // Add merge rules from other
         for (name, value) in &other.merge {
-            merge_map.entry(name.clone())
+            merge_map
+                .entry(name.clone())
                 .or_insert_with(Vec::new)
                 .push(value.clone());
         }
 
         // Flatten back to vec, combining values for same header with comma separator
-        result.merge = merge_map.into_iter()
+        result.merge = merge_map
+            .into_iter()
             .map(|(name, values)| {
                 // Join multiple values with comma-space separator
                 let combined_value = values.join(", ");
@@ -915,8 +926,8 @@ fn parse_expires(value: &Option<String>) -> Option<Option<u64>> {
         "hour" => 3600,
         "day" => 86400,
         "week" => 604800,
-        "month" => 2592000,  // 30 days
-        "year" => 31536000,  // 365 days
+        "month" => 2592000, // 30 days
+        "year" => 31536000, // 365 days
         _ => return None,
     };
 
@@ -953,7 +964,9 @@ impl Config {
 
             // Resolve listen config
             if let Some(listen_value) = &host_config.listen {
-                if let Ok(listen_config) = serde_yaml::from_value::<ListenConfig>(listen_value.clone()) {
+                if let Ok(listen_config) =
+                    serde_yaml::from_value::<ListenConfig>(listen_value.clone())
+                {
                     let addr = listen_config.socket_addr();
 
                     // Handle TCP listeners separately
@@ -976,12 +989,18 @@ impl Config {
                                 .map(ResolvedHealthConfig::from)
                                 .unwrap_or_default();
 
-                            let tls = host_config.tls.as_ref().map(|tls_cfg| ResolvedTcpTlsConfig {
-                                cert_path: tls_cfg.certificate_file.clone(),
-                                key_path: tls_cfg.key_file.clone(),
-                                transparent_upgrade: tls_cfg.transparent_upgrade.is_on(),
-                                handshake_timeout: Duration::from_millis(tls_cfg.handshake_timeout),
-                            });
+                            let tls =
+                                host_config
+                                    .tls
+                                    .as_ref()
+                                    .map(|tls_cfg| ResolvedTcpTlsConfig {
+                                        cert_path: tls_cfg.certificate_file.clone(),
+                                        key_path: tls_cfg.key_file.clone(),
+                                        transparent_upgrade: tls_cfg.transparent_upgrade.is_on(),
+                                        handshake_timeout: Duration::from_millis(
+                                            tls_cfg.handshake_timeout,
+                                        ),
+                                    });
 
                             tcp_listeners.push(ResolvedTcpListener {
                                 addr,
@@ -1046,7 +1065,10 @@ impl Config {
                 } else if let Some(dir) = &path_config.file_dir {
                     RouteAction::StaticFiles {
                         dir: dir.clone(),
-                        index: path_config.file_index.clone().unwrap_or_else(|| vec!["index.html".to_string()]),
+                        index: path_config
+                            .file_index
+                            .clone()
+                            .unwrap_or_else(|| vec!["index.html".to_string()]),
                         send_gzip: self.file_send_gzip.is_on(),
                         dirlisting: path_config.file_dirlisting.is_on(),
                     }
@@ -1080,7 +1102,9 @@ impl Config {
                 let mut proxy_headers = proxy_headers;
                 for h in &path_config.proxy_header_add.0 {
                     if let Some((k, v)) = h.split_once(':') {
-                        proxy_headers.set.push((k.trim().to_string(), v.trim().to_string()));
+                        proxy_headers
+                            .set
+                            .push((k.trim().to_string(), v.trim().to_string()));
                     }
                 }
 
@@ -1189,7 +1213,9 @@ mod tests {
 
     #[test]
     fn test_on_off_parsing_on_variants() {
-        let test_cases = ["ON", "on", "On", "TRUE", "true", "True", "YES", "yes", "Yes", "1"];
+        let test_cases = [
+            "ON", "on", "On", "TRUE", "true", "True", "YES", "yes", "Yes", "1",
+        ];
         for case in test_cases {
             let yaml = format!("\"{}\"", case);
             let result: OnOff = serde_yaml::from_str(&yaml).unwrap();
@@ -1199,7 +1225,9 @@ mod tests {
 
     #[test]
     fn test_on_off_parsing_off_variants() {
-        let test_cases = ["OFF", "off", "Off", "FALSE", "false", "False", "NO", "no", "No", "0"];
+        let test_cases = [
+            "OFF", "off", "Off", "FALSE", "false", "False", "NO", "no", "No", "0",
+        ];
         for case in test_cases {
             let yaml = format!("\"{}\"", case);
             let result: OnOff = serde_yaml::from_str(&yaml).unwrap();
@@ -1246,7 +1274,8 @@ mod tests {
 
     #[test]
     fn test_header_value_parsing_multiple() {
-        let multi: HeaderValue = serde_yaml::from_str("[\"X-Test: value1\", \"X-Test2: value2\"]").unwrap();
+        let multi: HeaderValue =
+            serde_yaml::from_str("[\"X-Test: value1\", \"X-Test2: value2\"]").unwrap();
         assert_eq!(multi.0.len(), 2);
         assert_eq!(multi.0[0], "X-Test: value1");
         assert_eq!(multi.0[1], "X-Test2: value2");
@@ -1422,10 +1451,16 @@ mod tests {
         assert_eq!(rules.set[0], ("X-Set".to_string(), "setval".to_string()));
 
         assert_eq!(rules.set_if_empty.len(), 1);
-        assert_eq!(rules.set_if_empty[0], ("X-IfEmpty".to_string(), "ifemptyval".to_string()));
+        assert_eq!(
+            rules.set_if_empty[0],
+            ("X-IfEmpty".to_string(), "ifemptyval".to_string())
+        );
 
         assert_eq!(rules.merge.len(), 1);
-        assert_eq!(rules.merge[0], ("Cache-Control".to_string(), "max-age=3600".to_string()));
+        assert_eq!(
+            rules.merge[0],
+            ("Cache-Control".to_string(), "max-age=3600".to_string())
+        );
 
         assert_eq!(rules.unset.len(), 1);
         assert_eq!(rules.unset[0], "X-Powered-By");
@@ -1481,7 +1516,10 @@ mod tests {
         let headers = vec!["  X-Test  :   value with spaces  ".to_string()];
         let parsed = parse_headers(&headers);
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0], ("X-Test".to_string(), "value with spaces".to_string()));
+        assert_eq!(
+            parsed[0],
+            ("X-Test".to_string(), "value with spaces".to_string())
+        );
     }
 
     #[test]
@@ -1490,7 +1528,13 @@ mod tests {
         let headers = vec!["X-URL: http://example.com:8080/path".to_string()];
         let parsed = parse_headers(&headers);
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0], ("X-URL".to_string(), "http://example.com:8080/path".to_string()));
+        assert_eq!(
+            parsed[0],
+            (
+                "X-URL".to_string(),
+                "http://example.com:8080/path".to_string()
+            )
+        );
     }
 
     #[test]
@@ -1646,7 +1690,10 @@ hosts:
         assert_eq!(host.paths.len(), 3);
 
         let api_path = host.paths.get("/api").unwrap();
-        assert_eq!(api_path.proxy_reverse_url, Some("http://api:3000".to_string()));
+        assert_eq!(
+            api_path.proxy_reverse_url,
+            Some("http://api:3000".to_string())
+        );
         assert!(api_path.proxy_preserve_host.unwrap().is_on());
 
         let static_path = host.paths.get("/static").unwrap();
@@ -1762,7 +1809,10 @@ hosts:
 
         let host = resolved.hosts.get("example.com:80").unwrap();
         match &host.routes[0].action {
-            RouteAction::Proxy { upstream, preserve_host } => {
+            RouteAction::Proxy {
+                upstream,
+                preserve_host,
+            } => {
                 assert_eq!(upstream, "http://backend:3000");
                 assert!(*preserve_host);
             }
@@ -1790,7 +1840,12 @@ hosts:
 
         let host = resolved.hosts.get("example.com:80").unwrap();
         match &host.routes[0].action {
-            RouteAction::StaticFiles { dir, index, send_gzip, .. } => {
+            RouteAction::StaticFiles {
+                dir,
+                index,
+                send_gzip,
+                ..
+            } => {
                 assert_eq!(dir, &PathBuf::from("/var/www"));
                 assert_eq!(index, &vec!["index.html".to_string()]);
                 assert!(*send_gzip);
@@ -1956,7 +2011,10 @@ hosts:
         // /external should override to OFF
         for route in &host.routes {
             match &route.action {
-                RouteAction::Proxy { preserve_host, upstream } => {
+                RouteAction::Proxy {
+                    preserve_host,
+                    upstream,
+                } => {
                     if upstream.contains("api") {
                         assert!(*preserve_host, "api should preserve host");
                     } else {
@@ -2392,8 +2450,14 @@ transparent-upgrade: ON
 handshake-timeout: 15000
 "#;
         let tls: TcpTlsConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(tls.certificate_file.to_str().unwrap(), "/etc/ssl/certs/server.crt");
-        assert_eq!(tls.key_file.to_str().unwrap(), "/etc/ssl/private/server.key");
+        assert_eq!(
+            tls.certificate_file.to_str().unwrap(),
+            "/etc/ssl/certs/server.crt"
+        );
+        assert_eq!(
+            tls.key_file.to_str().unwrap(),
+            "/etc/ssl/private/server.key"
+        );
         assert!(tls.transparent_upgrade.is_on());
         assert_eq!(tls.handshake_timeout, 15000);
     }
@@ -2433,8 +2497,14 @@ hosts:
 
         assert!(host.tls.is_some());
         let tls = host.tls.as_ref().unwrap();
-        assert_eq!(tls.certificate_file.to_str().unwrap(), "/etc/ssl/certs/server.crt");
-        assert_eq!(tls.key_file.to_str().unwrap(), "/etc/ssl/private/server.key");
+        assert_eq!(
+            tls.certificate_file.to_str().unwrap(),
+            "/etc/ssl/certs/server.crt"
+        );
+        assert_eq!(
+            tls.key_file.to_str().unwrap(),
+            "/etc/ssl/private/server.key"
+        );
         assert!(tls.transparent_upgrade.is_on());
         assert_eq!(tls.handshake_timeout, 5000);
     }
@@ -2466,7 +2536,10 @@ hosts:
         assert!(tcp_listener.tls.is_some());
         let tls = tcp_listener.tls.as_ref().unwrap();
         assert_eq!(tls.cert_path.to_str().unwrap(), "/etc/ssl/certs/server.crt");
-        assert_eq!(tls.key_path.to_str().unwrap(), "/etc/ssl/private/server.key");
+        assert_eq!(
+            tls.key_path.to_str().unwrap(),
+            "/etc/ssl/private/server.key"
+        );
         assert!(tls.transparent_upgrade);
         assert_eq!(tls.handshake_timeout, Duration::from_millis(5000));
     }

@@ -1,4 +1,4 @@
-# styx
+# pyx
 
 A high-performance reverse proxy written in Rust, designed as a drop-in replacement for h2o with configuration compatibility.
 
@@ -18,15 +18,15 @@ A high-performance reverse proxy written in Rust, designed as a drop-in replacem
 cargo build --release
 ```
 
-Binary will be at `target/release/styx`.
+Binary will be at `target/release/pyx`.
 
 ## Usage
 
 ```
-styx [OPTIONS]
+pyx [OPTIONS]
 
 Options:
-  -c, --config <CONFIG>       Configuration file [default: /etc/styx/styx.yaml]
+  -c, --config <CONFIG>       Configuration file [default: /etc/pyx/pyx.yaml]
   -l, --log-level <LEVEL>     Log level: trace, debug, info, warn, error [default: info]
       --json-logs             Enable JSON structured logging
   -t, --test                  Test configuration and exit
@@ -37,7 +37,7 @@ Options:
 
 ## Configuration
 
-styx uses h2o-compatible YAML configuration.
+pyx uses h2o-compatible YAML configuration.
 
 ### Minimal Example
 
@@ -57,7 +57,7 @@ hosts:
 ```yaml
 # Global settings
 num-threads: 4
-pid-file: /var/run/styx.pid
+pid-file: /var/run/pyx.pid
 
 # Protocol settings
 http2-enabled: ON
@@ -139,7 +139,7 @@ header.set:
 
 # Set only if header doesn't exist
 header.setifempty:
-  - "X-Powered-By: styx"
+  - "X-Powered-By: pyx"
 
 # Append to existing header
 header.merge:
@@ -200,7 +200,7 @@ listen:
 
 ### SNI with Multiple Certificates
 
-Configure multiple hosts on the same port. styx selects certificates based on SNI:
+Configure multiple hosts on the same port. pyx selects certificates based on SNI:
 
 ```yaml
 hosts:

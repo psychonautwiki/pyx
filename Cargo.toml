@@ -1,12 +1,12 @@
 [package]
-name = "styx"
+name = "pyx"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "High-performance reverse proxy with h2o configuration compatibility"
 license = "MIT"
-authors = ["styx Authors"]
-repository = "https://github.com/psychonautwiki/styx"
+authors = ["pyx Authors"]
+repository = "https://github.com/psychonautwiki/pyx"
 readme = "README.md"
 
 [dependencies]

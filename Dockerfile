@@ -29,13 +29,13 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the binary from builder
-COPY --from=builder /build/target/release/styx /usr/local/bin/styx
+COPY --from=builder /build/target/release/pyx /usr/local/bin/pyx
 
 # Copy the default configuration
-COPY styx.yaml /app/styx.yaml
+COPY pyx.yaml /app/pyx.yaml
 
 # Expose ports (80 and 443 based on config)
 EXPOSE 80 443
 
-# Run styx with the default config
-CMD ["styx", "--config", "/app/styx.yaml"]
+# Run pyx with the default config
+CMD ["pyx", "--config", "/app/pyx.yaml"]

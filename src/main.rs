@@ -1,4 +1,4 @@
-//! styx - High-performance reverse proxy
+//! pyx - High-performance reverse proxy
 //!
 //! A drop-in replacement for h2o with compatible configuration format.
 
@@ -25,13 +25,13 @@ static MOTD: &str = r#"
                   1.0
 "#;
 
-/// styx reverse proxy
+/// pyx reverse proxy
 #[derive(Parser, Debug)]
-#[command(name = "styx")]
+#[command(name = "pyx")]
 #[command(author, version, about = "High-performance reverse proxy", long_about = None)]
 struct Args {
     /// Configuration file path
-    #[arg(short, long, default_value = "/etc/styx/styx.yaml")]
+    #[arg(short, long, default_value = "/etc/pyx/pyx.yaml")]
     config: PathBuf,
 
     /// Log level (trace, debug, info, warn, error)
@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
     // Initialize logging
     init_logging(&args.log_level, args.json_logs)?;
 
-    info!("styx reverse proxy v{}", env!("CARGO_PKG_VERSION"));
+    info!("pyx reverse proxy v{}", env!("CARGO_PKG_VERSION"));
 
     // Quick static server mode
     if let Some(serve_dir) = args.serve_dir {
@@ -190,7 +190,7 @@ fn main() -> anyhow::Result<()> {
 
 fn init_logging(level: &str, json: bool) -> anyhow::Result<()> {
     let level = level.parse::<Level>().unwrap_or(Level::INFO);
-    let filter = EnvFilter::new(format!("styx={},hyper=warn,rustls=warn", level));
+    let filter = EnvFilter::new(format!("pyx={},hyper=warn,rustls=warn", level));
 
     if json {
         tracing_subscriber::registry()

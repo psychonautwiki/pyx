@@ -1,4 +1,4 @@
-//! Integration tests for the Styx reverse proxy
+//! Integration tests for the pyx reverse proxy
 //!
 //! These tests verify the end-to-end behavior of the system,
 //! including configuration loading, routing, and request handling.
@@ -284,7 +284,8 @@ mod routing_integration {
 
             assert!(matched.is_some(), "No match for path: {}", path);
             assert_eq!(
-                matched.unwrap().1, expected_route,
+                matched.unwrap().1,
+                expected_route,
                 "Wrong route for path: {}",
                 path
             );
@@ -299,13 +300,13 @@ mod routing_integration {
         let test_cases = vec![
             ("/api", Some("/api")),
             ("/api/test", Some("/api")),
-            ("/apikey", None),  // Should NOT match /api
+            ("/apikey", None), // Should NOT match /api
             ("/app", Some("/app")),
             ("/app/test", Some("/app")),
-            ("/apple", None),   // Should NOT match /app
+            ("/apple", None), // Should NOT match /app
             ("/application", Some("/application")),
             ("/application/test", Some("/application")),
-            ("/applications", None),  // Should NOT match /application
+            ("/applications", None), // Should NOT match /application
         ];
 
         for (path, expected) in test_cases {
@@ -420,9 +421,15 @@ mod header_integration {
         }
 
         let mut headers = MockHeaders::default();
-        headers.headers.insert("X-Existing".to_string(), "original".to_string());
-        headers.headers.insert("X-Remove".to_string(), "to-remove".to_string());
-        headers.headers.insert("Cache-Control".to_string(), "public".to_string());
+        headers
+            .headers
+            .insert("X-Existing".to_string(), "original".to_string());
+        headers
+            .headers
+            .insert("X-Remove".to_string(), "to-remove".to_string());
+        headers
+            .headers
+            .insert("Cache-Control".to_string(), "public".to_string());
 
         headers.apply_rules(
             &["X-Remove"],
@@ -434,8 +441,16 @@ mod header_integration {
         assert!(!headers.headers.contains_key("X-Remove"));
         assert_eq!(headers.headers.get("X-Existing").unwrap(), "original"); // Not overwritten
         assert_eq!(headers.headers.get("X-New").unwrap(), "value");
-        assert!(headers.headers.get("Cache-Control").unwrap().contains("public"));
-        assert!(headers.headers.get("Cache-Control").unwrap().contains("max-age=3600"));
+        assert!(headers
+            .headers
+            .get("Cache-Control")
+            .unwrap()
+            .contains("public"));
+        assert!(headers
+            .headers
+            .get("Cache-Control")
+            .unwrap()
+            .contains("max-age=3600"));
         assert_eq!(headers.headers.get("X-Force").unwrap(), "forced");
     }
 
@@ -463,8 +478,16 @@ mod url_integration {
         // Test how upstream URLs are constructed from config + request path
         let test_cases = vec![
             // (upstream_base, request_path, expected_contains)
-            ("http://backend:3000", "/api/users", "backend:3000/api/users"),
-            ("http://backend:3000/", "/api/users", "backend:3000/api/users"),
+            (
+                "http://backend:3000",
+                "/api/users",
+                "backend:3000/api/users",
+            ),
+            (
+                "http://backend:3000/",
+                "/api/users",
+                "backend:3000/api/users",
+            ),
             ("http://varnish:80", "/wiki/Main", "varnish:80/wiki/Main"),
         ];
 
@@ -515,7 +538,9 @@ mod url_integration {
 
         for path in attack_paths {
             // Check if path contains ".." component
-            let has_traversal = path.split('/').any(|c| c == ".." || c == "%2e%2e" || c == "%2E%2E");
+            let has_traversal = path
+                .split('/')
+                .any(|c| c == ".." || c == "%2e%2e" || c == "%2E%2E");
             assert!(
                 has_traversal || path.contains(".."),
                 "Should detect traversal in: {}",
@@ -628,7 +653,11 @@ mod error_integration {
         ];
 
         for (code, _description) in redirect_codes {
-            assert!(code >= 300 && code < 400, "Should be redirect code: {}", code);
+            assert!(
+                code >= 300 && code < 400,
+                "Should be redirect code: {}",
+                code
+            );
         }
     }
 }

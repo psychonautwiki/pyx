@@ -84,12 +84,7 @@ fn apply_response_headers<B>(response: &mut Response<B>, rules: &HeaderRules) {
                     ", "
                 };
 
-                let merged = format!(
-                    "{}{}{}",
-                    existing.to_str().unwrap_or(""),
-                    separator,
-                    value
-                );
+                let merged = format!("{}{}{}", existing.to_str().unwrap_or(""), separator, value);
 
                 if let Ok(merged_value) = HeaderValue::from_str(&merged) {
                     headers.insert(header_name, merged_value);
@@ -223,12 +218,7 @@ fn bench_header_manipulation(c: &mut Criterion) {
         };
 
         b.iter_batched(
-            || {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(())
-                    .unwrap()
-            },
+            || Response::builder().status(StatusCode::OK).body(()).unwrap(),
             |mut response| {
                 apply_response_headers(black_box(&mut response), black_box(&rules));
                 response
@@ -246,12 +236,7 @@ fn bench_header_manipulation(c: &mut Criterion) {
         };
 
         b.iter_batched(
-            || {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(())
-                    .unwrap()
-            },
+            || Response::builder().status(StatusCode::OK).body(()).unwrap(),
             |mut response| {
                 apply_response_headers(black_box(&mut response), black_box(&rules));
                 response
@@ -323,12 +308,7 @@ fn bench_header_manipulation(c: &mut Criterion) {
         };
 
         b.iter_batched(
-            || {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(())
-                    .unwrap()
-            },
+            || Response::builder().status(StatusCode::OK).body(()).unwrap(),
             |mut response| {
                 apply_response_headers(black_box(&mut response), black_box(&rules));
                 response
@@ -367,12 +347,7 @@ fn bench_header_manipulation(c: &mut Criterion) {
         };
 
         b.iter_batched(
-            || {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(())
-                    .unwrap()
-            },
+            || Response::builder().status(StatusCode::OK).body(()).unwrap(),
             |mut response| {
                 apply_response_headers(black_box(&mut response), black_box(&rules));
                 response
@@ -515,7 +490,7 @@ fn bench_request_headers(c: &mut Criterion) {
     // Large request headers
     group.bench_function("large_request", |b| {
         let rules = HeaderRules {
-            set: vec![("X-Proxy".to_string(), "styx".to_string())],
+            set: vec![("X-Proxy".to_string(), "pyx".to_string())],
             ..Default::default()
         };
 
@@ -602,7 +577,12 @@ fn bench_response_creation(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
 
     group.bench_function("error_404", |b| {
-        b.iter(|| error_response(black_box(StatusCode::NOT_FOUND), black_box("Page not found")))
+        b.iter(|| {
+            error_response(
+                black_box(StatusCode::NOT_FOUND),
+                black_box("Page not found"),
+            )
+        })
     });
 
     group.bench_function("error_500", |b| {
@@ -622,9 +602,7 @@ fn bench_response_creation(c: &mut Criterion) {
         b.iter(|| redirect_response(black_box(302), black_box("https://example.com/temp")))
     });
 
-    group.bench_function("status", |b| {
-        b.iter(|| status_response())
-    });
+    group.bench_function("status", |b| b.iter(|| status_response()));
 
     // With long URLs
     group.bench_function("redirect_long_url", |b| {
@@ -659,7 +637,11 @@ fn bench_header_name_parsing(c: &mut Criterion) {
     });
 
     group.bench_function("long", |b| {
-        b.iter(|| HeaderName::from_str(black_box("X-Very-Long-Custom-Header-Name-That-Spans-Many-Characters")))
+        b.iter(|| {
+            HeaderName::from_str(black_box(
+                "X-Very-Long-Custom-Header-Name-That-Spans-Many-Characters",
+            ))
+        })
     });
 
     group.finish();
@@ -712,7 +694,9 @@ fn bench_combined_operations_scaling(c: &mut Criterion) {
             set_if_empty: (0..(*num_rules / 2))
                 .map(|i| (format!("X-Default-{}", i), format!("default{}", i)))
                 .collect(),
-            unset: (0..(*num_rules / 4)).map(|i| format!("X-Unset-{}", i)).collect(),
+            unset: (0..(*num_rules / 4))
+                .map(|i| format!("X-Unset-{}", i))
+                .collect(),
             merge: (0..(*num_rules / 4))
                 .map(|i| (format!("X-Merge-{}", i), format!("merge{}", i)))
                 .collect(),

@@ -1721,6 +1721,64 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyx"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "arc-swap",
+ "async-compression",
+ "bytes",
+ "chrono",
+ "clap",
+ "criterion",
+ "crossbeam",
+ "dashmap",
+ "deadpool",
+ "fastrand",
+ "futures-util",
+ "governor",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "hyper-util",
+ "indexmap",
+ "lru",
+ "matchit",
+ "mime_guess",
+ "nonzero_ext",
+ "once_cell",
+ "parking_lot",
+ "pin-project-lite",
+ "prometheus-client",
+ "quinn",
+ "regex",
+ "reqwest",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_yaml",
+ "smallvec",
+ "tempfile",
+ "test-log",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-rustls",
+ "tokio-test",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "webpki-roots 0.26.11",
+ "wiremock",
+]
+
+[[package]]
 name = "quanta"
 version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2285,64 +2343,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "styx"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "arc-swap",
- "async-compression",
- "bytes",
- "chrono",
- "clap",
- "criterion",
- "crossbeam",
- "dashmap",
- "deadpool",
- "fastrand",
- "futures-util",
- "governor",
- "h2",
- "h3",
- "h3-quinn",
- "http",
- "http-body-util",
- "humantime",
- "hyper",
- "hyper-util",
- "indexmap",
- "lru",
- "matchit",
- "mime_guess",
- "nonzero_ext",
- "once_cell",
- "parking_lot",
- "pin-project-lite",
- "prometheus-client",
- "quinn",
- "regex",
- "reqwest",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_yaml",
- "smallvec",
- "tempfile",
- "test-log",
- "thiserror 2.0.17",
- "tokio",
- "tokio-rustls",
- "tokio-test",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "webpki-roots 0.26.11",
- "wiremock",
-]
 
 [[package]]
 name = "subtle"

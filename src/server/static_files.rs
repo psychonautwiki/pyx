@@ -1225,7 +1225,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_index_file_none_exist() {
-        let temp_dir = std::env::temp_dir().join("styx_test_no_index");
+        let temp_dir = std::env::temp_dir().join("pyx_test_no_index");
         let _ = tokio::fs::create_dir(&temp_dir).await;
 
         let index_files = vec!["index.html".to_string(), "index.htm".to_string()];
@@ -1238,7 +1238,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_index_file_first_match() {
-        let temp_dir = std::env::temp_dir().join("styx_test_index_first");
+        let temp_dir = std::env::temp_dir().join("pyx_test_index_first");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         // Create both index files
@@ -1261,7 +1261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_index_file_second_match() {
-        let temp_dir = std::env::temp_dir().join("styx_test_index_second");
+        let temp_dir = std::env::temp_dir().join("pyx_test_index_second");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         // Create only index.htm
@@ -1350,7 +1350,7 @@ mod tests {
     #[tokio::test]
     async fn test_serve_static_real_file() {
         // Create a temporary file to serve
-        let temp_dir = std::env::temp_dir().join("styx_test_serve");
+        let temp_dir = std::env::temp_dir().join("pyx_test_serve");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         let test_file = temp_dir.join("test.txt");
@@ -1385,7 +1385,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve_static_head_request() {
-        let temp_dir = std::env::temp_dir().join("styx_test_head");
+        let temp_dir = std::env::temp_dir().join("pyx_test_head");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         let test_file = temp_dir.join("test.txt");
@@ -1420,7 +1420,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve_static_if_none_match() {
-        let temp_dir = std::env::temp_dir().join("styx_test_etag");
+        let temp_dir = std::env::temp_dir().join("pyx_test_etag");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         let test_file = temp_dir.join("test.txt");
@@ -1462,7 +1462,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve_static_gzip() {
-        let temp_dir = std::env::temp_dir().join("styx_test_gzip");
+        let temp_dir = std::env::temp_dir().join("pyx_test_gzip");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         // Create both regular and gzipped versions
@@ -1504,7 +1504,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve_static_gzip_not_accepted() {
-        let temp_dir = std::env::temp_dir().join("styx_test_no_gzip");
+        let temp_dir = std::env::temp_dir().join("pyx_test_no_gzip");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         let test_file = temp_dir.join("test.js");
@@ -1542,7 +1542,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve_static_directory_with_index() {
-        let temp_dir = std::env::temp_dir().join("styx_test_dir_index");
+        let temp_dir = std::env::temp_dir().join("pyx_test_dir_index");
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
         let index_file = temp_dir.join("index.html");
@@ -1713,7 +1713,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_listing_basic() {
-        let temp_dir = std::env::temp_dir().join("styx_test_dir_listing");
+        let temp_dir = std::env::temp_dir().join("pyx_test_dir_listing");
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
@@ -1749,7 +1749,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_listing_disabled() {
-        let temp_dir = std::env::temp_dir().join("styx_test_dir_listing_disabled");
+        let temp_dir = std::env::temp_dir().join("pyx_test_dir_listing_disabled");
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
@@ -1781,7 +1781,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_listing_hides_hidden_files() {
-        let temp_dir = std::env::temp_dir().join("styx_test_hidden_files");
+        let temp_dir = std::env::temp_dir().join("pyx_test_hidden_files");
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
@@ -1803,7 +1803,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_listing_with_sort() {
-        let temp_dir = std::env::temp_dir().join("styx_test_dir_sort");
+        let temp_dir = std::env::temp_dir().join("pyx_test_dir_sort");
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 
@@ -1834,7 +1834,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_with_index_serves_index() {
-        let temp_dir = std::env::temp_dir().join("styx_test_index_priority");
+        let temp_dir = std::env::temp_dir().join("pyx_test_index_priority");
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         let _ = tokio::fs::create_dir_all(&temp_dir).await;
 

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-// Re-create minimal types needed for benchmarks since we can't import from styx directly
+// Re-create minimal types needed for benchmarks since we can't import from pyx directly
 // in criterion benchmarks without some setup
 
 /// Header rules for benchmarks
@@ -192,9 +192,7 @@ impl Router {
             // Also index by just hostname (without port)
             if let Some(idx) = name.rfind(':') {
                 let hostname = &name[..idx];
-                host_matchers
-                    .entry(hostname.to_string())
-                    .or_insert(matcher);
+                host_matchers.entry(hostname.to_string()).or_insert(matcher);
             }
         }
 
@@ -489,13 +487,17 @@ fn bench_path_matching_many_routes(c: &mut Criterion) {
         );
 
         // Miss all routes
-        group.bench_with_input(BenchmarkId::new("no_match", size), &matcher, |b, matcher| {
-            // Create a matcher without root route for miss testing
-            b.iter(|| {
-                // This will still match root, but tests the traversal
-                matcher.match_path(black_box("/completely/different/path"))
-            })
-        });
+        group.bench_with_input(
+            BenchmarkId::new("no_match", size),
+            &matcher,
+            |b, matcher| {
+                // Create a matcher without root route for miss testing
+                b.iter(|| {
+                    // This will still match root, but tests the traversal
+                    matcher.match_path(black_box("/completely/different/path"))
+                })
+            },
+        );
     }
 
     group.finish();

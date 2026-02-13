@@ -241,7 +241,7 @@ header.unset:
   - "X-AspNet-Version"
 
 header.set:
-  - "X-Proxy: styx"
+  - "X-Proxy: pyx"
 
 hosts:
   "wiki.example.com:80":
@@ -530,13 +530,9 @@ fn bench_path_normalization(c: &mut Criterion) {
         }
     }
 
-    group.bench_function("root", |b| {
-        b.iter(|| normalize_path(black_box("/")))
-    });
+    group.bench_function("root", |b| b.iter(|| normalize_path(black_box("/"))));
 
-    group.bench_function("simple", |b| {
-        b.iter(|| normalize_path(black_box("/api")))
-    });
+    group.bench_function("simple", |b| b.iter(|| normalize_path(black_box("/api"))));
 
     group.bench_function("with_trailing_slash", |b| {
         b.iter(|| normalize_path(black_box("/api/")))
@@ -546,9 +542,7 @@ fn bench_path_normalization(c: &mut Criterion) {
         b.iter(|| normalize_path(black_box("/api/v1/users/123/profile/")))
     });
 
-    group.bench_function("empty", |b| {
-        b.iter(|| normalize_path(black_box("")))
-    });
+    group.bench_function("empty", |b| b.iter(|| normalize_path(black_box(""))));
 
     group.finish();
 }
@@ -589,9 +583,7 @@ fn bench_yaml_value_access(c: &mut Criterion) {
     // Raw YAML value access (for anchor resolution)
     let yaml: serde_yaml::Value = serde_yaml::from_str(medium_config()).unwrap();
 
-    group.bench_function("mapping_get", |b| {
-        b.iter(|| yaml.get(black_box("hosts")))
-    });
+    group.bench_function("mapping_get", |b| b.iter(|| yaml.get(black_box("hosts"))));
 
     group.bench_function("nested_access", |b| {
         b.iter(|| {

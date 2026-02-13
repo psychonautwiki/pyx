@@ -135,7 +135,7 @@ impl Server {
 
     /// Run the server
     pub async fn run(self: Arc<Self>) -> anyhow::Result<()> {
-        info!("Starting styx reverse proxy");
+        info!("Starting pyx reverse proxy");
 
         let mut handles = Vec::new();
 
