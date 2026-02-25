@@ -287,32 +287,30 @@ impl Server {
 
         let mut builder = http1::Builder::new();
         builder.keep_alive(true);
+        builder.timer(hyper_util::rt::TokioTimer::new());
 
-        // Serve connection with overall timeout (5 minutes max per connection)
+        // Serve connection
         // Use with_upgrades() to support WebSocket upgrades
-        tokio::time::timeout(
-            Duration::from_secs(300),
-            builder.serve_connection(
-                io,
-                service_fn(move |req| {
-                    let server = Arc::clone(&server);
-                    // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
-                    async move {
-                        tokio::time::timeout(
-                            Duration::from_secs(120),
-                            server.handle_request(req, peer_addr, false)
-                        )
-                        .await
-                        .unwrap_or_else(|_| {
-                            Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
-                                .map(|body| body.map_err(|e| match e {}).boxed()))
-                        })
-                    }
-                }),
-            )
-            .with_upgrades()
+        builder.serve_connection(
+            io,
+            service_fn(move |req| {
+                let server = Arc::clone(&server);
+                // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
+                async move {
+                    tokio::time::timeout(
+                        Duration::from_secs(120),
+                        server.handle_request(req, peer_addr, false)
+                    )
+                    .await
+                    .unwrap_or_else(|_| {
+                        Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
+                            .map(|body| body.map_err(|e| match e {}).boxed()))
+                    })
+                }
+            }),
         )
-        .await??;
+        .with_upgrades()
+        .await?;
 
         Ok(())
     }
@@ -387,32 +385,30 @@ impl Server {
 
         let mut builder = http1::Builder::new();
         builder.keep_alive(true);
+        builder.timer(hyper_util::rt::TokioTimer::new());
 
-        // Serve connection with overall timeout (5 minutes max per connection)
+        // Serve connection
         // Use with_upgrades() to support WebSocket upgrades (wss://)
-        tokio::time::timeout(
-            Duration::from_secs(300),
-            builder.serve_connection(
-                io,
-                service_fn(move |req| {
-                    let server = Arc::clone(&server);
-                    // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
-                    async move {
-                        tokio::time::timeout(
-                            Duration::from_secs(120),
-                            server.handle_request(req, peer_addr, true)
-                        )
-                        .await
-                        .unwrap_or_else(|_| {
-                            Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
-                                .map(|body| body.map_err(|e| match e {}).boxed()))
-                        })
-                    }
-                }),
-            )
-            .with_upgrades()
+        builder.serve_connection(
+            io,
+            service_fn(move |req| {
+                let server = Arc::clone(&server);
+                // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
+                async move {
+                    tokio::time::timeout(
+                        Duration::from_secs(120),
+                        server.handle_request(req, peer_addr, true)
+                    )
+                    .await
+                    .unwrap_or_else(|_| {
+                        Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
+                            .map(|body| body.map_err(|e| match e {}).boxed()))
+                    })
+                }
+            }),
         )
-        .await??;
+        .with_upgrades()
+        .await?;
 
         Ok(())
     }
@@ -434,34 +430,34 @@ impl Server {
         // HTTP/2 specific settings from config
         let h2_config = &self.config.http2;
         builder
+            .timer(hyper_util::rt::TokioTimer::new())
+            .keep_alive_interval(Duration::from_secs(h2_config.idle_timeout))
+            .keep_alive_timeout(Duration::from_secs(20))
             .max_concurrent_streams(h2_config.max_concurrent_streams)
             .initial_stream_window_size(h2_config.initial_stream_window)
             .initial_connection_window_size(h2_config.initial_connection_window)
             .max_frame_size(h2_config.max_frame_size);
 
-        // Serve connection with idle timeout from config
-        tokio::time::timeout(
-            Duration::from_secs(h2_config.idle_timeout),
-            builder.serve_connection(
-                io,
-                service_fn(move |req| {
-                    let server = Arc::clone(&server);
-                    // Per-request timeout (2 minutes)
-                    async move {
-                        tokio::time::timeout(
-                            Duration::from_secs(120),
-                            server.handle_request(req, peer_addr, true)
-                        )
-                        .await
-                        .unwrap_or_else(|_| {
-                            Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
-                                .map(|body| body.map_err(|e| match e {}).boxed()))
-                        })
-                    }
-                }),
-            )
+        // Serve connection
+        builder.serve_connection(
+            io,
+            service_fn(move |req| {
+                let server = Arc::clone(&server);
+                // Per-request timeout (2 minutes)
+                async move {
+                    tokio::time::timeout(
+                        Duration::from_secs(120),
+                        server.handle_request(req, peer_addr, true)
+                    )
+                    .await
+                    .unwrap_or_else(|_| {
+                        Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
+                            .map(|body| body.map_err(|e| match e {}).boxed()))
+                    })
+                }
+            }),
         )
-        .await??;
+        .await?;
 
         Ok(())
     }
