@@ -6,11 +6,77 @@
 //! - header.merge: Append value (comma-separated for most headers)
 //! - header.unset: Remove the header
 
-use crate::config::HeaderRules;
+use crate::config::{HeaderRules, ResolvedBasicAuth};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
-use http::{HeaderMap, HeaderName, HeaderValue, Response, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, Response, StatusCode, header};
 use http_body_util::Full;
 use std::str::FromStr;
+
+/// Check an Authorization header against resolved HTTP Basic auth config.
+pub fn is_basic_auth_authorized(headers: &HeaderMap, auth: &ResolvedBasicAuth) -> bool {
+    let Some(header_value) = headers.get(header::AUTHORIZATION) else {
+        return false;
+    };
+    let Ok(header_value) = header_value.to_str() else {
+        return false;
+    };
+    let Some((scheme, encoded)) = header_value.trim().split_once(char::is_whitespace) else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return false;
+    }
+    let Ok(decoded) = STANDARD.decode(encoded.trim()) else {
+        return false;
+    };
+    let Ok(credentials) = std::str::from_utf8(&decoded) else {
+        return false;
+    };
+    let Some((username, password)) = credentials.split_once(':') else {
+        return false;
+    };
+    let Some(expected_password) = auth.users.get(username) else {
+        return false;
+    };
+
+    constant_time_eq(password.as_bytes(), expected_password.as_bytes())
+}
+
+/// Build a 401 response with the Basic challenge header.
+pub fn basic_auth_challenge_response(realm: &str) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(
+            header::WWW_AUTHENTICATE,
+            format!("Basic realm=\"{}\"", escape_auth_realm(realm)),
+        )
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Full::new(Bytes::from_static(b"Unauthorized")))
+        .unwrap()
+}
+
+fn escape_auth_realm(realm: &str) -> String {
+    realm
+        .chars()
+        .filter(|c| !c.is_control())
+        .flat_map(|c| match c {
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\\' => "\\\\".chars().collect(),
+            _ => vec![c],
+        })
+        .collect()
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut diff = left.len() ^ right.len();
+    for index in 0..left.len().max(right.len()) {
+        let a = *left.get(index).unwrap_or(&0);
+        let b = *right.get(index).unwrap_or(&0);
+        diff |= (a ^ b) as usize;
+    }
+    diff == 0
+}
 
 /// Apply header rules to a response
 pub fn apply_response_headers<B>(response: &mut Response<B>, rules: &HeaderRules) {
@@ -25,10 +91,9 @@ pub fn apply_response_headers<B>(response: &mut Response<B>, rules: &HeaderRules
 
     // Apply set-if-empty
     for (name, value) in &rules.set_if_empty {
-        if let (Ok(header_name), Ok(header_value)) = (
-            HeaderName::from_str(name),
-            HeaderValue::from_str(value),
-        ) {
+        if let (Ok(header_name), Ok(header_value)) =
+            (HeaderName::from_str(name), HeaderValue::from_str(value))
+        {
             if !headers.contains_key(&header_name) {
                 headers.insert(header_name, header_value);
             }
@@ -37,10 +102,9 @@ pub fn apply_response_headers<B>(response: &mut Response<B>, rules: &HeaderRules
 
     // Apply merges (append to existing)
     for (name, value) in &rules.merge {
-        if let (Ok(header_name), Ok(header_value)) = (
-            HeaderName::from_str(name),
-            HeaderValue::from_str(value),
-        ) {
+        if let (Ok(header_name), Ok(header_value)) =
+            (HeaderName::from_str(name), HeaderValue::from_str(value))
+        {
             // Set-Cookie should use append, not comma merge
             if name.eq_ignore_ascii_case("set-cookie") {
                 headers.append(header_name, header_value);
@@ -63,17 +127,13 @@ pub fn apply_response_headers<B>(response: &mut Response<B>, rules: &HeaderRules
                 let value_with_trailing = format!("{}, ", value);
                 if existing_str.starts_with(&format!("{}, ", value))
                     || existing_str.ends_with(&value_with_leading)
-                    || existing_str.contains(&value_with_trailing) {
+                    || existing_str.contains(&value_with_trailing)
+                {
                     // Value already present as a complete segment
                     continue;
                 }
 
-                let merged = format!(
-                    "{}{}{}",
-                    existing_str,
-                    separator,
-                    value
-                );
+                let merged = format!("{}{}{}", existing_str, separator, value);
 
                 // Limit header value length to prevent unbounded growth
                 const MAX_HEADER_VALUE_LENGTH: usize = 8192;
@@ -97,10 +157,9 @@ pub fn apply_response_headers<B>(response: &mut Response<B>, rules: &HeaderRules
 
     // Apply sets (override everything)
     for (name, value) in &rules.set {
-        if let (Ok(header_name), Ok(header_value)) = (
-            HeaderName::from_str(name),
-            HeaderValue::from_str(value),
-        ) {
+        if let (Ok(header_name), Ok(header_value)) =
+            (HeaderName::from_str(name), HeaderValue::from_str(value))
+        {
             headers.insert(header_name, header_value);
         }
     }
@@ -117,10 +176,9 @@ pub fn apply_request_headers(headers: &mut HeaderMap, rules: &HeaderRules) {
 
     // Apply set-if-empty
     for (name, value) in &rules.set_if_empty {
-        if let (Ok(header_name), Ok(header_value)) = (
-            HeaderName::from_str(name),
-            HeaderValue::from_str(value),
-        ) {
+        if let (Ok(header_name), Ok(header_value)) =
+            (HeaderName::from_str(name), HeaderValue::from_str(value))
+        {
             if !headers.contains_key(&header_name) {
                 headers.insert(header_name, header_value);
             }
@@ -129,20 +187,18 @@ pub fn apply_request_headers(headers: &mut HeaderMap, rules: &HeaderRules) {
 
     // Apply merges
     for (name, value) in &rules.merge {
-        if let (Ok(header_name), Ok(header_value)) = (
-            HeaderName::from_str(name),
-            HeaderValue::from_str(value),
-        ) {
+        if let (Ok(header_name), Ok(header_value)) =
+            (HeaderName::from_str(name), HeaderValue::from_str(value))
+        {
             headers.append(header_name, header_value);
         }
     }
 
     // Apply sets
     for (name, value) in &rules.set {
-        if let (Ok(header_name), Ok(header_value)) = (
-            HeaderName::from_str(name),
-            HeaderValue::from_str(value),
-        ) {
+        if let (Ok(header_name), Ok(header_value)) =
+            (HeaderName::from_str(name), HeaderValue::from_str(value))
+        {
             headers.insert(header_name, header_value);
         }
     }
@@ -202,9 +258,7 @@ pub fn redirect_response(status: u16, location: &str) -> Response<Full<Bytes>> {
     }
 
     // Sanitize location header value to prevent response splitting
-    let sanitized_location = location
-        .replace('\r', "")
-        .replace('\n', "");
+    let sanitized_location = location.replace('\r', "").replace('\n', "");
 
     let body = format!(
         "<!DOCTYPE html>\n<html><head><title>Redirect</title></head>\n\
@@ -329,6 +383,50 @@ pub fn apply_expires<B>(response: &mut Response<B>, expires: Option<Option<u64>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
+
+    fn test_auth() -> ResolvedBasicAuth {
+        let mut users = IndexMap::new();
+        users.insert("alice".to_string(), "secret".to_string());
+        ResolvedBasicAuth {
+            realm: "private".to_string(),
+            users,
+        }
+    }
+
+    #[test]
+    fn test_basic_auth_accepts_valid_credentials() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic YWxpY2U6c2VjcmV0"),
+        );
+
+        assert!(is_basic_auth_authorized(&headers, &test_auth()));
+    }
+
+    #[test]
+    fn test_basic_auth_rejects_missing_or_wrong_credentials() {
+        assert!(!is_basic_auth_authorized(&HeaderMap::new(), &test_auth()));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic YWxpY2U6d3Jvbmc="),
+        );
+
+        assert!(!is_basic_auth_authorized(&headers, &test_auth()));
+    }
+
+    #[test]
+    fn test_basic_auth_challenge_escapes_realm() {
+        let response = basic_auth_challenge_response("private \"area\"");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(header::WWW_AUTHENTICATE).unwrap(),
+            "Basic realm=\"private \\\"area\\\"\""
+        );
+    }
 
     // =====================================================================
     // apply_response_headers - set tests
@@ -348,10 +446,7 @@ mod tests {
 
         apply_response_headers(&mut response, &rules);
 
-        assert_eq!(
-            response.headers().get("X-Custom").unwrap(),
-            "value"
-        );
+        assert_eq!(response.headers().get("X-Custom").unwrap(), "value");
     }
 
     #[test]
@@ -369,10 +464,7 @@ mod tests {
 
         apply_response_headers(&mut response, &rules);
 
-        assert_eq!(
-            response.headers().get("X-Custom").unwrap(),
-            "new_value"
-        );
+        assert_eq!(response.headers().get("X-Custom").unwrap(), "new_value");
     }
 
     #[test]
@@ -414,10 +506,7 @@ mod tests {
         apply_response_headers(&mut response, &rules);
 
         // HTTP headers are case-insensitive
-        assert_eq!(
-            response.headers().get("x-custom").unwrap(),
-            "new"
-        );
+        assert_eq!(response.headers().get("x-custom").unwrap(), "new");
     }
 
     // =====================================================================
@@ -443,15 +532,9 @@ mod tests {
         apply_response_headers(&mut response, &rules);
 
         // Existing header should not be changed
-        assert_eq!(
-            response.headers().get("X-Existing").unwrap(),
-            "original"
-        );
+        assert_eq!(response.headers().get("X-Existing").unwrap(), "original");
         // New header should be set
-        assert_eq!(
-            response.headers().get("X-New").unwrap(),
-            "value"
-        );
+        assert_eq!(response.headers().get("X-New").unwrap(), "value");
     }
 
     #[test]
@@ -491,10 +574,7 @@ mod tests {
         apply_response_headers(&mut response, &rules);
 
         // Should NOT overwrite because header exists (case-insensitive)
-        assert_eq!(
-            response.headers().get("x-existing").unwrap(),
-            "original"
-        );
+        assert_eq!(response.headers().get("x-existing").unwrap(), "original");
     }
 
     // =====================================================================
@@ -605,7 +685,12 @@ mod tests {
 
         apply_response_headers(&mut response, &rules);
 
-        let cc = response.headers().get("Cache-Control").unwrap().to_str().unwrap();
+        let cc = response
+            .headers()
+            .get("Cache-Control")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(cc.contains("public"));
         assert!(cc.contains("max-age=3600"));
     }
@@ -624,7 +709,12 @@ mod tests {
 
         apply_response_headers(&mut response, &rules);
 
-        let cc = response.headers().get("Cache-Control").unwrap().to_str().unwrap();
+        let cc = response
+            .headers()
+            .get("Cache-Control")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(cc, "max-age=3600");
     }
 
@@ -646,7 +736,12 @@ mod tests {
 
         apply_response_headers(&mut response, &rules);
 
-        let cc = response.headers().get("Cache-Control").unwrap().to_str().unwrap();
+        let cc = response
+            .headers()
+            .get("Cache-Control")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(cc.contains("public"));
         assert!(cc.contains("max-age=3600"));
         // Note: The current implementation replaces each time, so the final
@@ -672,7 +767,12 @@ mod tests {
         apply_response_headers(&mut response, &rules);
         apply_response_headers(&mut response, &rules);
 
-        let cc = response.headers().get("Cache-Control").unwrap().to_str().unwrap();
+        let cc = response
+            .headers()
+            .get("Cache-Control")
+            .unwrap()
+            .to_str()
+            .unwrap();
 
         // Should only appear once, not three times
         assert_eq!(cc, "public, max-age=3600");
@@ -699,10 +799,18 @@ mod tests {
             apply_response_headers(&mut response, &rules);
         }
 
-        let cc = response.headers().get("Cache-Control").unwrap().to_str().unwrap();
+        let cc = response
+            .headers()
+            .get("Cache-Control")
+            .unwrap()
+            .to_str()
+            .unwrap();
 
         // Should still only be the original value, not duplicated
-        assert_eq!(cc, "public, stale-while-revalidate=31536000, stale-if-error=31536000, max-age=7200, max-stale=86400");
+        assert_eq!(
+            cc,
+            "public, stale-while-revalidate=31536000, stale-if-error=31536000, max-age=7200, max-stale=86400"
+        );
     }
 
     // =====================================================================
@@ -853,11 +961,26 @@ mod tests {
         let rules = default_security_headers();
 
         // Check set_if_empty headers
-        assert!(rules.set_if_empty.iter().any(|(n, _)| n == "X-Xss-Protection"));
-        assert!(rules.set_if_empty.iter().any(|(n, _)| n == "X-Content-Type-Options"));
+        assert!(
+            rules
+                .set_if_empty
+                .iter()
+                .any(|(n, _)| n == "X-Xss-Protection")
+        );
+        assert!(
+            rules
+                .set_if_empty
+                .iter()
+                .any(|(n, _)| n == "X-Content-Type-Options")
+        );
         // Removed overly permissive CORS header from defaults
         // assert!(rules.set_if_empty.iter().any(|(n, _)| n == "Access-Control-Allow-Origin"));
-        assert!(rules.set_if_empty.iter().any(|(n, _)| n == "Referrer-Policy"));
+        assert!(
+            rules
+                .set_if_empty
+                .iter()
+                .any(|(n, _)| n == "Referrer-Policy")
+        );
 
         // Cache-Control moved to set_if_empty to avoid duplication with upstream headers
         assert!(rules.set_if_empty.iter().any(|(n, _)| n == "Cache-Control"));
@@ -1044,7 +1167,10 @@ mod tests {
         let rules = HeaderRules {
             set: vec![
                 ("X-Custom".to_string(), "value with spaces".to_string()),
-                ("X-Url".to_string(), "http://example.com/path?a=1&b=2".to_string()),
+                (
+                    "X-Url".to_string(),
+                    "http://example.com/path?a=1&b=2".to_string(),
+                ),
             ],
             ..Default::default()
         };
@@ -1117,10 +1243,7 @@ mod tests {
 
         apply_response_headers(&mut response, &rules);
 
-        assert_eq!(
-            response.headers().get("Surrogate-Key").unwrap(),
-            "main api"
-        );
+        assert_eq!(response.headers().get("Surrogate-Key").unwrap(), "main api");
     }
 
     // =====================================================================

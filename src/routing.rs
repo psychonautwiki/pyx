@@ -4,7 +4,7 @@
 //! supporting exact matches, prefix matches, and the h2o-style
 //! longest-prefix-wins matching behavior.
 
-use crate::config::{HeaderRules, ResolvedHost, RouteAction};
+use crate::config::{HeaderRules, ResolvedBasicAuth, ResolvedHost, RouteAction};
 use ahash::AHashMap;
 use std::sync::Arc;
 use tracing::trace;
@@ -27,6 +27,8 @@ struct RouteEntry {
     headers: HeaderRules,
     /// Proxy request headers
     proxy_headers: HeaderRules,
+    /// Basic auth required by this route
+    auth: Option<ResolvedBasicAuth>,
     /// Expires setting (None = not set, Some(None) = off, Some(Some(secs)) = max-age)
     expires: Option<Option<u64>>,
 }
@@ -42,6 +44,7 @@ impl RouteMatcher {
                 action: r.action.clone(),
                 headers: r.headers.clone(),
                 proxy_headers: r.proxy_headers.clone(),
+                auth: r.auth.clone(),
                 expires: r.expires,
             })
             .collect();
@@ -64,6 +67,7 @@ impl RouteMatcher {
                     headers: self.host_headers.merge_with(&route.headers),
                     proxy_headers: route.proxy_headers.clone(),
                     matched_path: route.path.clone(),
+                    auth: route.auth.clone(),
                     expires: route.expires,
                 });
             }
@@ -77,6 +81,7 @@ impl RouteMatcher {
                     headers: self.host_headers.merge_with(&route.headers),
                     proxy_headers: route.proxy_headers.clone(),
                     matched_path: route.path.clone(),
+                    auth: route.auth.clone(),
                     expires: route.expires,
                 });
             }
@@ -130,6 +135,8 @@ pub struct MatchResult {
     pub proxy_headers: HeaderRules,
     /// The path pattern that matched
     pub matched_path: String,
+    /// Basic auth required by this matched route
+    pub auth: Option<ResolvedBasicAuth>,
     /// Expires setting (None = not set, Some(None) = off, Some(Some(secs)) = max-age)
     pub expires: Option<Option<u64>>,
 }
@@ -168,7 +175,8 @@ impl Router {
                     None => true,
                     Some(&existing_port) => {
                         // Prefer 443 over other ports, then prefer higher ports
-                        (port == 443 && existing_port != 443) || (existing_port != 443 && port > existing_port)
+                        (port == 443 && existing_port != 443)
+                            || (existing_port != 443 && port > existing_port)
                     }
                 };
 
@@ -241,7 +249,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/api".to_string(),
@@ -251,7 +260,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/static".to_string(),
@@ -263,7 +273,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
             ],
             headers: HeaderRules::default(),
@@ -313,7 +324,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/w".to_string(),
@@ -323,7 +335,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/w/index.php".to_string(),
@@ -333,7 +346,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
             ],
             headers: HeaderRules::default(),
@@ -359,15 +373,14 @@ mod tests {
     #[test]
     fn test_path_match_with_trailing_slash() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/api".to_string(),
-                    action: RouteAction::Status,
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
-                },
-            ],
+            routes: vec![ResolvedRoute {
+                path: "/api".to_string(),
+                action: RouteAction::Status,
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -392,7 +405,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/yolo/".to_string(),
@@ -404,7 +418,8 @@ mod tests {
                     },
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
             ],
             headers: HeaderRules::default(),
@@ -437,15 +452,14 @@ mod tests {
     fn test_path_no_false_prefix_match() {
         // /api should NOT match /apikey
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/api".to_string(),
-                    action: RouteAction::Status,
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
-                },
-            ],
+            routes: vec![ResolvedRoute {
+                path: "/api".to_string(),
+                action: RouteAction::Status,
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -459,15 +473,14 @@ mod tests {
     #[test]
     fn test_root_path_matches_everything() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/".to_string(),
-                    action: RouteAction::Status,
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
-                },
-            ],
+            routes: vec![ResolvedRoute {
+                path: "/".to_string(),
+                action: RouteAction::Status,
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -500,35 +513,40 @@ mod tests {
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/a".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/a/b".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/a/b/c".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/a/b/c/d".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
             ],
             headers: HeaderRules::default(),
@@ -536,8 +554,14 @@ mod tests {
 
         let matcher = RouteMatcher::new(&host);
 
-        assert_eq!(matcher.match_path("/a/b/c/d").unwrap().matched_path, "/a/b/c/d");
-        assert_eq!(matcher.match_path("/a/b/c/d/e").unwrap().matched_path, "/a/b/c/d");
+        assert_eq!(
+            matcher.match_path("/a/b/c/d").unwrap().matched_path,
+            "/a/b/c/d"
+        );
+        assert_eq!(
+            matcher.match_path("/a/b/c/d/e").unwrap().matched_path,
+            "/a/b/c/d"
+        );
         assert_eq!(matcher.match_path("/a/b/c").unwrap().matched_path, "/a/b/c");
         assert_eq!(matcher.match_path("/a/b").unwrap().matched_path, "/a/b");
         assert_eq!(matcher.match_path("/a").unwrap().matched_path, "/a");
@@ -553,21 +577,24 @@ mod tests {
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/application".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/apps".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
             ],
             headers: HeaderRules::default(),
@@ -575,12 +602,27 @@ mod tests {
 
         let matcher = RouteMatcher::new(&host);
 
-        assert_eq!(matcher.match_path("/application").unwrap().matched_path, "/application");
-        assert_eq!(matcher.match_path("/application/test").unwrap().matched_path, "/application");
+        assert_eq!(
+            matcher.match_path("/application").unwrap().matched_path,
+            "/application"
+        );
+        assert_eq!(
+            matcher
+                .match_path("/application/test")
+                .unwrap()
+                .matched_path,
+            "/application"
+        );
         assert_eq!(matcher.match_path("/apps").unwrap().matched_path, "/apps");
-        assert_eq!(matcher.match_path("/apps/list").unwrap().matched_path, "/apps");
+        assert_eq!(
+            matcher.match_path("/apps/list").unwrap().matched_path,
+            "/apps"
+        );
         assert_eq!(matcher.match_path("/app").unwrap().matched_path, "/app");
-        assert_eq!(matcher.match_path("/app/settings").unwrap().matched_path, "/app");
+        assert_eq!(
+            matcher.match_path("/app/settings").unwrap().matched_path,
+            "/app"
+        );
 
         // These should NOT match any of the above
         assert!(matcher.match_path("/apple").is_none());
@@ -590,15 +632,14 @@ mod tests {
     #[test]
     fn test_query_string_not_part_of_path() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/api".to_string(),
-                    action: RouteAction::Status,
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
-                },
-            ],
+            routes: vec![ResolvedRoute {
+                path: "/api".to_string(),
+                action: RouteAction::Status,
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -612,23 +653,34 @@ mod tests {
     #[test]
     fn test_special_characters_in_path() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/wiki".to_string(),
-                    action: RouteAction::Status,
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
-                },
-            ],
+            routes: vec![ResolvedRoute {
+                path: "/wiki".to_string(),
+                action: RouteAction::Status,
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
         let matcher = RouteMatcher::new(&host);
 
         // Should match paths with URL-encoded characters
-        assert_eq!(matcher.match_path("/wiki/Special:Search").unwrap().matched_path, "/wiki");
-        assert_eq!(matcher.match_path("/wiki/Test%20Page").unwrap().matched_path, "/wiki");
+        assert_eq!(
+            matcher
+                .match_path("/wiki/Special:Search")
+                .unwrap()
+                .matched_path,
+            "/wiki"
+        );
+        assert_eq!(
+            matcher
+                .match_path("/wiki/Test%20Page")
+                .unwrap()
+                .matched_path,
+            "/wiki"
+        );
     }
 
     // =====================================================================
@@ -652,15 +704,14 @@ mod tests {
         };
 
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/".to_string(),
-                    action: RouteAction::Status,
-                    headers: route_headers,
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
-                },
-            ],
+            routes: vec![ResolvedRoute {
+                path: "/".to_string(),
+                action: RouteAction::Status,
+                headers: route_headers,
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: host_headers,
         };
 
@@ -681,18 +732,17 @@ mod tests {
         };
 
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/".to_string(),
-                    action: RouteAction::Proxy {
-                        upstream: "http://backend:80".to_string(),
-                        preserve_host: true,
-                    },
-                    headers: HeaderRules::default(),
-                    proxy_headers: proxy_headers.clone(),
-                    expires: None,
+            routes: vec![ResolvedRoute {
+                path: "/".to_string(),
+                action: RouteAction::Proxy {
+                    upstream: "http://backend:80".to_string(),
+                    preserve_host: true,
                 },
-            ],
+                headers: HeaderRules::default(),
+                proxy_headers: proxy_headers.clone(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -710,18 +760,17 @@ mod tests {
     #[test]
     fn test_redirect_action() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/old".to_string(),
-                    action: RouteAction::Redirect {
-                        url: "https://example.com/new".to_string(),
-                        status: 301,
-                    },
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
+            routes: vec![ResolvedRoute {
+                path: "/old".to_string(),
+                action: RouteAction::Redirect {
+                    url: "https://example.com/new".to_string(),
+                    status: 301,
                 },
-            ],
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -740,15 +789,14 @@ mod tests {
     #[test]
     fn test_status_action() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/health".to_string(),
-                    action: RouteAction::Status,
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
-                },
-            ],
+            routes: vec![ResolvedRoute {
+                path: "/health".to_string(),
+                action: RouteAction::Status,
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -761,20 +809,19 @@ mod tests {
     #[test]
     fn test_static_files_action() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/static".to_string(),
-                    action: RouteAction::StaticFiles {
-                        dir: "/var/www/static".into(),
-                        index: vec!["index.html".to_string(), "index.htm".to_string()],
-                        send_gzip: true,
-                        dirlisting: false,
-                    },
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
+            routes: vec![ResolvedRoute {
+                path: "/static".to_string(),
+                action: RouteAction::StaticFiles {
+                    dir: "/var/www/static".into(),
+                    index: vec!["index.html".to_string(), "index.htm".to_string()],
+                    send_gzip: true,
+                    dirlisting: false,
                 },
-            ],
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -782,7 +829,12 @@ mod tests {
         let result = matcher.match_path("/static/file.js").unwrap();
 
         match result.action {
-            RouteAction::StaticFiles { dir, index, send_gzip, .. } => {
+            RouteAction::StaticFiles {
+                dir,
+                index,
+                send_gzip,
+                ..
+            } => {
                 assert_eq!(dir.to_str().unwrap(), "/var/www/static");
                 assert_eq!(index.len(), 2);
                 assert!(send_gzip);
@@ -794,18 +846,17 @@ mod tests {
     #[test]
     fn test_proxy_action() {
         let host = ResolvedHost {
-            routes: vec![
-                ResolvedRoute {
-                    path: "/api".to_string(),
-                    action: RouteAction::Proxy {
-                        upstream: "http://api-server:3000".to_string(),
-                        preserve_host: false,
-                    },
-                    headers: HeaderRules::default(),
-                    proxy_headers: HeaderRules::default(),
-                        expires: None,
+            routes: vec![ResolvedRoute {
+                path: "/api".to_string(),
+                action: RouteAction::Proxy {
+                    upstream: "http://api-server:3000".to_string(),
+                    preserve_host: false,
                 },
-            ],
+                headers: HeaderRules::default(),
+                proxy_headers: HeaderRules::default(),
+                auth: None,
+                expires: None,
+            }],
             headers: HeaderRules::default(),
         };
 
@@ -813,7 +864,10 @@ mod tests {
         let result = matcher.match_path("/api/v1/users").unwrap();
 
         match result.action {
-            RouteAction::Proxy { upstream, preserve_host } => {
+            RouteAction::Proxy {
+                upstream,
+                preserve_host,
+            } => {
                 assert_eq!(upstream, "http://api-server:3000");
                 assert!(!preserve_host);
             }
@@ -831,15 +885,14 @@ mod tests {
         hosts.insert(
             "example.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Status,
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
-                    },
-                ],
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Status,
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -856,15 +909,14 @@ mod tests {
         hosts.insert(
             "example.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Status,
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
-                    },
-                ],
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Status,
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -882,15 +934,14 @@ mod tests {
         hosts.insert(
             "example.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Status,
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
-                    },
-                ],
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Status,
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -907,36 +958,34 @@ mod tests {
         hosts.insert(
             "example.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Redirect {
-                            url: "https://example.com/".to_string(),
-                            status: 301,
-                        },
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Redirect {
+                        url: "https://example.com/".to_string(),
+                        status: 301,
                     },
-                ],
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
         hosts.insert(
             "other.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Redirect {
-                            url: "https://other.com/".to_string(),
-                            status: 301,
-                        },
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Redirect {
+                        url: "https://other.com/".to_string(),
+                        status: 301,
                     },
-                ],
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -962,36 +1011,34 @@ mod tests {
         hosts.insert(
             "api.example.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Proxy {
-                            upstream: "http://api:3000".to_string(),
-                            preserve_host: true,
-                        },
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Proxy {
+                        upstream: "http://api:3000".to_string(),
+                        preserve_host: true,
                     },
-                ],
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
         hosts.insert(
             "www.example.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Proxy {
-                            upstream: "http://web:8080".to_string(),
-                            preserve_host: true,
-                        },
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Proxy {
+                        upstream: "http://web:8080".to_string(),
+                        preserve_host: true,
                     },
-                ],
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -1026,21 +1073,24 @@ mod tests {
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/a/b/c".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
                 ResolvedRoute {
                     path: "/a/b".to_string(),
                     action: RouteAction::Status,
                     headers: HeaderRules::default(),
                     proxy_headers: HeaderRules::default(),
-                        expires: None,
+                    auth: None,
+                    expires: None,
                 },
             ],
             headers: HeaderRules::default(),
@@ -1049,7 +1099,10 @@ mod tests {
         let matcher = RouteMatcher::new(&host);
 
         // Despite insertion order, longest should match
-        assert_eq!(matcher.match_path("/a/b/c/d").unwrap().matched_path, "/a/b/c");
+        assert_eq!(
+            matcher.match_path("/a/b/c/d").unwrap().matched_path,
+            "/a/b/c"
+        );
     }
 
     #[test]
@@ -1058,30 +1111,28 @@ mod tests {
         hosts.insert(
             "abc123.onion:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Status,
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
-                    },
-                ],
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Status,
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
         hosts.insert(
             "site.i2p:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Status,
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
-                    },
-                ],
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Status,
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -1098,15 +1149,14 @@ mod tests {
         hosts.insert(
             "192.168.1.1:8080".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/".to_string(),
-                        action: RouteAction::Status,
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
-                    },
-                ],
+                routes: vec![ResolvedRoute {
+                    path: "/".to_string(),
+                    action: RouteAction::Status,
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -1152,6 +1202,7 @@ mod tests {
                         },
                         headers: HeaderRules::default(),
                         proxy_headers: HeaderRules::default(),
+                        auth: None,
                         expires: None,
                     },
                     ResolvedRoute {
@@ -1162,6 +1213,7 @@ mod tests {
                         },
                         headers: HeaderRules::default(),
                         proxy_headers: HeaderRules::default(),
+                        auth: None,
                         expires: None,
                     },
                 ],
@@ -1182,6 +1234,7 @@ mod tests {
                         },
                         headers: HeaderRules::default(),
                         proxy_headers: HeaderRules::default(),
+                        auth: None,
                         expires: None,
                     },
                     ResolvedRoute {
@@ -1192,6 +1245,7 @@ mod tests {
                         },
                         headers: HeaderRules::default(),
                         proxy_headers: HeaderRules::default(),
+                        auth: None,
                         expires: None,
                     },
                     ResolvedRoute {
@@ -1202,6 +1256,7 @@ mod tests {
                         },
                         headers: HeaderRules::default(),
                         proxy_headers: HeaderRules::default(),
+                        auth: None,
                         expires: None,
                     },
                 ],
@@ -1212,7 +1267,11 @@ mod tests {
         let router = Router::new(&hosts);
 
         // HTTP requests to :80 should only see paths defined on :80
-        assert!(router.route("example.com:80", "/.well-known/acme").is_some());
+        assert!(
+            router
+                .route("example.com:80", "/.well-known/acme")
+                .is_some()
+        );
         assert!(router.route("example.com:80", "/public").is_some());
         assert!(router.route("example.com:80", "/public/page").is_some());
 
@@ -1253,15 +1312,14 @@ mod tests {
         hosts.insert(
             "limited.com:80".to_string(),
             Arc::new(ResolvedHost {
-                routes: vec![
-                    ResolvedRoute {
-                        path: "/public".to_string(),
-                        action: RouteAction::Status,
-                        headers: HeaderRules::default(),
-                        proxy_headers: HeaderRules::default(),
-                        expires: None,
-                    },
-                ],
+                routes: vec![ResolvedRoute {
+                    path: "/public".to_string(),
+                    action: RouteAction::Status,
+                    headers: HeaderRules::default(),
+                    proxy_headers: HeaderRules::default(),
+                    auth: None,
+                    expires: None,
+                }],
                 headers: HeaderRules::default(),
             }),
         );
@@ -1276,6 +1334,7 @@ mod tests {
                         action: RouteAction::Status,
                         headers: HeaderRules::default(),
                         proxy_headers: HeaderRules::default(),
+                        auth: None,
                         expires: None,
                     },
                     ResolvedRoute {
@@ -1283,6 +1342,7 @@ mod tests {
                         action: RouteAction::Status,
                         headers: HeaderRules::default(),
                         proxy_headers: HeaderRules::default(),
+                        auth: None,
                         expires: None,
                     },
                 ],

@@ -5,12 +5,12 @@
 
 use crate::config::{HeaderRules, Http3Config, ResolvedConfig, RouteAction, TlsListenerConfig};
 use crate::middleware::{
-    apply_expires, apply_response_headers, default_security_headers, redirect_response,
-    status_response,
+    apply_expires, apply_response_headers, basic_auth_challenge_response, default_security_headers,
+    is_basic_auth_authorized, redirect_response, status_response,
 };
 use crate::proxy::ReverseProxy;
 use crate::routing::{MatchResult, Router};
-use crate::server::static_files::{serve_static_h3, StaticFileConfig};
+use crate::server::static_files::{StaticFileConfig, serve_static_h3};
 
 use bytes::{Buf, Bytes};
 use h3::server::RequestStream;
@@ -21,8 +21,8 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 
@@ -57,11 +57,7 @@ pub struct Http3Server {
 
 impl Http3Server {
     /// Create a new HTTP/3 server
-    pub fn new(
-        config: Arc<ResolvedConfig>,
-        router: Arc<Router>,
-        proxy: Arc<ReverseProxy>,
-    ) -> Self {
+    pub fn new(config: Arc<ResolvedConfig>, router: Arc<Router>, proxy: Arc<ReverseProxy>) -> Self {
         let h3_config = config.http3.clone();
         Self {
             config,
@@ -128,14 +124,22 @@ impl Http3Server {
 
         // Accept connections
         while let Some(incoming) = endpoint.accept().await {
-            self.stats.handshakes_started.fetch_add(1, Ordering::Relaxed);
+            self.stats
+                .handshakes_started
+                .fetch_add(1, Ordering::Relaxed);
 
             let server = Arc::clone(&self);
             tokio::spawn(async move {
                 match incoming.await {
                     Ok(connection) => {
-                        server.stats.handshakes_completed.fetch_add(1, Ordering::Relaxed);
-                        server.stats.active_connections.fetch_add(1, Ordering::Relaxed);
+                        server
+                            .stats
+                            .handshakes_completed
+                            .fetch_add(1, Ordering::Relaxed);
+                        server
+                            .stats
+                            .active_connections
+                            .fetch_add(1, Ordering::Relaxed);
 
                         let peer_addr = connection.remote_address();
                         if let Err(e) = server.handle_connection(connection, peer_addr).await {
@@ -143,10 +147,16 @@ impl Http3Server {
                             server.stats.errors.fetch_add(1, Ordering::Relaxed);
                         }
 
-                        server.stats.active_connections.fetch_sub(1, Ordering::Relaxed);
+                        server
+                            .stats
+                            .active_connections
+                            .fetch_sub(1, Ordering::Relaxed);
                     }
                     Err(e) => {
-                        server.stats.handshakes_failed.fetch_add(1, Ordering::Relaxed);
+                        server
+                            .stats
+                            .handshakes_failed
+                            .fetch_add(1, Ordering::Relaxed);
                         debug!("QUIC handshake failed: {}", e);
                     }
                 }
@@ -208,9 +218,7 @@ impl Http3Server {
         let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
 
         // Set max concurrent bidirectional streams
-        transport_config.max_concurrent_bidi_streams(
-            self.h3_config.max_concurrent_streams.into()
-        );
+        transport_config.max_concurrent_bidi_streams(self.h3_config.max_concurrent_streams.into());
 
         // h3 needs unidirectional streams for control/QPACK
         transport_config.max_concurrent_uni_streams(3_u8.into());
@@ -219,16 +227,12 @@ impl Http3Server {
         transport_config.max_idle_timeout(Some(
             Duration::from_secs(self.h3_config.idle_timeout)
                 .try_into()
-                .unwrap_or(quinn::IdleTimeout::from(quinn::VarInt::from_u32(30_000)))
+                .unwrap_or(quinn::IdleTimeout::from(quinn::VarInt::from_u32(30_000))),
         ));
 
         // Set receive window sizes
-        transport_config.stream_receive_window(
-            self.h3_config.stream_receive_window.into()
-        );
-        transport_config.receive_window(
-            self.h3_config.connection_receive_window.into()
-        );
+        transport_config.stream_receive_window(self.h3_config.stream_receive_window.into());
+        transport_config.receive_window(self.h3_config.connection_receive_window.into());
 
         Ok(server_config)
     }
@@ -243,9 +247,10 @@ impl Http3Server {
 
         // Create h3 connection using builder pattern
         // Explicitly specify Bytes as the buffer type
-        let mut h3_conn: h3::server::Connection<h3_quinn::Connection, Bytes> = h3::server::builder()
-            .build(h3_quinn::Connection::new(connection))
-            .await?;
+        let mut h3_conn: h3::server::Connection<h3_quinn::Connection, Bytes> =
+            h3::server::builder()
+                .build(h3_quinn::Connection::new(connection))
+                .await?;
 
         // Accept requests
         loop {
@@ -263,13 +268,10 @@ impl Http3Server {
                         match resolver.resolve_request().await {
                             Ok((request, stream)) => {
                                 if let Err(e) = handle_request(
-                                    request,
-                                    stream,
-                                    peer_addr,
-                                    router,
-                                    proxy,
-                                    config,
-                                ).await {
+                                    request, stream, peer_addr, router, proxy, config,
+                                )
+                                .await
+                                {
                                     debug!("HTTP/3 request error: {}", e);
                                     stats.errors.fetch_add(1, Ordering::Relaxed);
                                 }
@@ -299,7 +301,7 @@ impl Http3Server {
 
 /// Handle a single HTTP/3 request
 async fn handle_request<S>(
-    request: Request<()>,
+    mut request: Request<()>,
     mut stream: RequestStream<S, Bytes>,
     peer_addr: SocketAddr,
     router: Arc<Router>,
@@ -318,7 +320,13 @@ where
 
     let path = request.uri().path();
 
-    trace!("HTTP/3 request: {} {} {} from {}", request.method(), host, path, peer_addr);
+    trace!(
+        "HTTP/3 request: {} {} {} from {}",
+        request.method(),
+        host,
+        path,
+        peer_addr
+    );
 
     // Route the request
     let result = match router.route(host, path) {
@@ -336,24 +344,44 @@ where
         }
     };
 
+    if let Some(auth) = &result.auth {
+        if !is_basic_auth_authorized(request.headers(), auth) {
+            debug!("HTTP/3 basic auth failed for {} {}", host, path);
+            let auth_response = basic_auth_challenge_response(&auth.realm);
+            let (parts, body) = auth_response.into_parts();
+            let body = body.collect().await?.to_bytes();
+            stream
+                .send_response(Response::from_parts(parts, ()))
+                .await?;
+            stream.send_data(body).await?;
+            stream.finish().await?;
+            return Ok(());
+        }
+
+        request.headers_mut().remove(http::header::AUTHORIZATION);
+    }
+
     // Read request body from stream (needed for proxy)
     let request_body = read_request_body(&mut stream).await.unwrap_or_default();
 
     // Execute the action
-    let response = match execute_action(&request, request_body, &result, &proxy, &config, peer_addr).await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("HTTP/3 request error: {}", e);
-            let response = Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(())
-                .unwrap();
-            stream.send_response(response).await?;
-            stream.send_data(Bytes::from(format!("Proxy error: {}", e))).await?;
-            stream.finish().await?;
-            return Ok(());
-        }
-    };
+    let response =
+        match execute_action(&request, request_body, &result, &proxy, &config, peer_addr).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("HTTP/3 request error: {}", e);
+                let response = Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(())
+                    .unwrap();
+                stream.send_response(response).await?;
+                stream
+                    .send_data(Bytes::from(format!("Proxy error: {}", e)))
+                    .await?;
+                stream.finish().await?;
+                return Ok(());
+            }
+        };
 
     // Send response
     let (parts, body) = response.into_parts();
@@ -424,7 +452,12 @@ async fn execute_action(
             Ok(Response::from_parts(parts, body_bytes))
         }
 
-        RouteAction::StaticFiles { dir, index, send_gzip, dirlisting } => {
+        RouteAction::StaticFiles {
+            dir,
+            index,
+            send_gzip,
+            dirlisting,
+        } => {
             let static_config = StaticFileConfig {
                 root: dir.clone(),
                 index: index.clone(),
@@ -450,25 +483,30 @@ async fn execute_action(
             }
         }
 
-        RouteAction::Proxy { upstream, preserve_host } => {
+        RouteAction::Proxy {
+            upstream,
+            preserve_host,
+        } => {
             // Merge proxy headers
             let merged_proxy_headers = global_headers.merge_with(&route.headers);
             let response_headers = HeaderRules::default();
 
             // Forward the request to the upstream
             // HTTP/3 is always over QUIC/TLS, so client_scheme is always "https"
-            let response = proxy.proxy_with_body(
-                request.method().clone(),
-                request.uri(),
-                request.headers().clone(),
-                request_body,
-                upstream,
-                *preserve_host,
-                &merged_proxy_headers,
-                &response_headers,
-                Some(peer_addr.ip()),
-                "https",
-            ).await?;
+            let response = proxy
+                .proxy_with_body(
+                    request.method().clone(),
+                    request.uri(),
+                    request.headers().clone(),
+                    request_body,
+                    upstream,
+                    *preserve_host,
+                    &merged_proxy_headers,
+                    &response_headers,
+                    Some(peer_addr.ip()),
+                    "https",
+                )
+                .await?;
 
             // Apply response headers
             let (parts, body) = response.into_parts();
@@ -512,7 +550,6 @@ mod tests {
     use super::*;
     use crate::config::{Http2Config, Http3Config};
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     // =========================================================================
     // Http3Stats tests
@@ -576,8 +613,12 @@ mod tests {
             handles.push(thread::spawn(move || {
                 for _ in 0..100 {
                     stats_clone.requests.fetch_add(1, Ordering::Relaxed);
-                    stats_clone.active_connections.fetch_add(1, Ordering::Relaxed);
-                    stats_clone.active_connections.fetch_sub(1, Ordering::Relaxed);
+                    stats_clone
+                        .active_connections
+                        .fetch_add(1, Ordering::Relaxed);
+                    stats_clone
+                        .active_connections
+                        .fetch_sub(1, Ordering::Relaxed);
                 }
             }));
         }
@@ -647,7 +688,10 @@ mod tests {
         let config2 = config1.clone();
 
         assert_eq!(config1.enabled, config2.enabled);
-        assert_eq!(config1.max_concurrent_streams, config2.max_concurrent_streams);
+        assert_eq!(
+            config1.max_concurrent_streams,
+            config2.max_concurrent_streams
+        );
         assert_eq!(config1.idle_timeout, config2.idle_timeout);
     }
 
@@ -660,7 +704,12 @@ mod tests {
         let mut reader = std::io::Cursor::new(Vec::<u8>::new());
         let result = load_private_key(&mut reader);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No private key found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No private key found")
+        );
     }
 
     #[test]
@@ -719,11 +768,7 @@ cjSBFnGNTJhEj8LnALVkOW7VG8cWB0fZ/M7X9qvB3R0u9RvOYl5E
         let router = Arc::new(Router::new(&config.hosts));
         let proxy = ReverseProxy::new(crate::proxy::ProxyConfig::default());
 
-        let server = Http3Server::new(
-            Arc::clone(&config),
-            router,
-            proxy,
-        );
+        let server = Http3Server::new(Arc::clone(&config), router, proxy);
 
         assert!(server.h3_config.enabled);
         assert_eq!(server.h3_config.max_concurrent_streams, 256);
@@ -737,11 +782,7 @@ cjSBFnGNTJhEj8LnALVkOW7VG8cWB0fZ/M7X9qvB3R0u9RvOYl5E
         let router = Arc::new(Router::new(&config.hosts));
         let proxy = ReverseProxy::new(crate::proxy::ProxyConfig::default());
 
-        let server = Http3Server::new(
-            Arc::clone(&config),
-            router,
-            proxy,
-        );
+        let server = Http3Server::new(Arc::clone(&config), router, proxy);
 
         assert!(!server.h3_config.enabled);
     }
@@ -769,11 +810,13 @@ cjSBFnGNTJhEj8LnALVkOW7VG8cWB0fZ/M7X9qvB3R0u9RvOYl5E
             headers: HeaderRules::default(),
             proxy_headers: HeaderRules::default(),
             matched_path: "/old-page".to_string(),
+            auth: None,
             expires: None,
         };
 
         let peer_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-        let result = execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
+        let result =
+            execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -797,11 +840,13 @@ cjSBFnGNTJhEj8LnALVkOW7VG8cWB0fZ/M7X9qvB3R0u9RvOYl5E
             headers: HeaderRules::default(),
             proxy_headers: HeaderRules::default(),
             matched_path: "/status".to_string(),
+            auth: None,
             expires: None,
         };
 
         let peer_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-        let result = execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
+        let result =
+            execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -832,11 +877,13 @@ cjSBFnGNTJhEj8LnALVkOW7VG8cWB0fZ/M7X9qvB3R0u9RvOYl5E
             headers: HeaderRules::default(),
             proxy_headers: HeaderRules::default(),
             matched_path: "/".to_string(),
+            auth: None,
             expires: None,
         };
 
         let peer_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-        let result = execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
+        let result =
+            execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -986,11 +1033,13 @@ cjSBFnGNTJhEj8LnALVkOW7VG8cWB0fZ/M7X9qvB3R0u9RvOYl5E
             headers: HeaderRules::default(),
             proxy_headers: HeaderRules::default(),
             matched_path: "/api".to_string(),
+            auth: None,
             expires: None,
         };
 
         let peer_addr: SocketAddr = "192.168.1.1:12345".parse().unwrap();
-        let result = execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
+        let result =
+            execute_action(&request, Bytes::new(), &route, &proxy, &config, peer_addr).await;
 
         // Should fail due to invalid URL format
         assert!(result.is_err());

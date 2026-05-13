@@ -1,8 +1,8 @@
 //! Interactive configuration wizard for `pyx menu <config-file>`.
 
 use crate::config::{
-    BackendConfig, Config, HeaderValue, HealthConfig, HostConfig, ListenConfig, ListenerType,
-    OnOff, PathConfig, SslConfig, SslSessionResumption, TcpTlsConfig,
+    BackendConfig, BasicAuthConfig, Config, HeaderValue, HealthConfig, HostConfig, ListenConfig,
+    ListenerType, OnOff, PathConfig, SslConfig, SslSessionResumption, TcpTlsConfig,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
@@ -88,6 +88,9 @@ enum FieldId {
     GlobalDurationStats,
     GlobalSslSessionResumptionMode,
     GlobalListenRaw,
+    GlobalBasicAuthEnabled,
+    GlobalBasicAuthRealm,
+    GlobalBasicAuthUsers,
     LetsEncryptEnabled,
     LetsEncryptCacheDir,
     LetsEncryptStaging,
@@ -121,6 +124,9 @@ enum FieldId {
     HostHealthIoTimeout(String),
     HostHealthSigmaThreshold(String),
     HostHealthLatencyAware(String),
+    HostBasicAuthEnabled(String),
+    HostBasicAuthRealm(String),
+    HostBasicAuthUsers(String),
     PathRedirect(String, String),
     PathStatus(String, String),
     PathExpires(String, String),
@@ -129,6 +135,9 @@ enum FieldId {
     PathFileDirlisting(String, String),
     PathProxyReverseUrl(String, String),
     PathProxyPreserveHost(String, String),
+    PathBasicAuthEnabled(String, String),
+    PathBasicAuthRealm(String, String),
+    PathBasicAuthUsers(String, String),
     BackendHost(String, usize),
     BackendPort(String, usize),
     BackendWeight(String, usize),
@@ -821,6 +830,9 @@ impl MenuApp {
                 .unwrap_or_default()
                 .trim()
                 .to_string(),
+            FieldId::GlobalBasicAuthEnabled => basic_auth_enabled(&self.config.basic_auth),
+            FieldId::GlobalBasicAuthRealm => basic_auth_realm(&self.config.basic_auth),
+            FieldId::GlobalBasicAuthUsers => basic_auth_users(&self.config.basic_auth),
             FieldId::LetsEncryptEnabled => onoff(self.config.letsencrypt.enabled),
             FieldId::LetsEncryptCacheDir => self.config.letsencrypt.cache_dir.display().to_string(),
             FieldId::LetsEncryptStaging => onoff(self.config.letsencrypt.staging),
@@ -923,6 +935,15 @@ impl MenuApp {
             FieldId::HostHealthLatencyAware(host) => {
                 onoff(opt_health(get_host(&self.config, host)).latency_aware)
             }
+            FieldId::HostBasicAuthEnabled(host) => {
+                basic_auth_enabled(&get_host(&self.config, host).basic_auth)
+            }
+            FieldId::HostBasicAuthRealm(host) => {
+                basic_auth_realm(&get_host(&self.config, host).basic_auth)
+            }
+            FieldId::HostBasicAuthUsers(host) => {
+                basic_auth_users(&get_host(&self.config, host).basic_auth)
+            }
             FieldId::PathRedirect(host, path) => {
                 opt_string(&get_path(&self.config, host, path).redirect)
             }
@@ -948,6 +969,15 @@ impl MenuApp {
                 .proxy_preserve_host
                 .map(onoff)
                 .unwrap_or_default(),
+            FieldId::PathBasicAuthEnabled(host, path) => {
+                basic_auth_enabled(&get_path(&self.config, host, path).basic_auth)
+            }
+            FieldId::PathBasicAuthRealm(host, path) => {
+                basic_auth_realm(&get_path(&self.config, host, path).basic_auth)
+            }
+            FieldId::PathBasicAuthUsers(host, path) => {
+                basic_auth_users(&get_path(&self.config, host, path).basic_auth)
+            }
             FieldId::BackendHost(host, index) => get_host(&self.config, host)
                 .backends
                 .get(*index)
@@ -1026,6 +1056,15 @@ impl MenuApp {
                         }
                     }
                 }
+            }
+            FieldId::GlobalBasicAuthEnabled => {
+                set_optional_basic_auth_enabled(&mut self.config.basic_auth, value);
+            }
+            FieldId::GlobalBasicAuthRealm => {
+                ensure_basic_auth(&mut self.config.basic_auth).realm = value;
+            }
+            FieldId::GlobalBasicAuthUsers => {
+                set_basic_auth_users(ensure_basic_auth(&mut self.config.basic_auth), &value);
             }
             FieldId::LetsEncryptCacheDir => {
                 self.config.letsencrypt.cache_dir = PathBuf::from(value)
@@ -1135,6 +1174,22 @@ impl MenuApp {
                 value,
                 &mut ensure_health(ensure_host(&mut self.config, &host)).sigma_threshold,
             ),
+            FieldId::HostBasicAuthEnabled(host) => {
+                set_optional_basic_auth_enabled(
+                    &mut ensure_host(&mut self.config, &host).basic_auth,
+                    value,
+                );
+            }
+            FieldId::HostBasicAuthRealm(host) => {
+                ensure_basic_auth(&mut ensure_host(&mut self.config, &host).basic_auth).realm =
+                    value;
+            }
+            FieldId::HostBasicAuthUsers(host) => {
+                set_basic_auth_users(
+                    ensure_basic_auth(&mut ensure_host(&mut self.config, &host).basic_auth),
+                    &value,
+                );
+            }
             FieldId::PathRedirect(host, path) => {
                 ensure_path(ensure_host(&mut self.config, &host), &path).redirect =
                     none_if_empty(value)
@@ -1162,6 +1217,26 @@ impl MenuApp {
                     } else {
                         Some(parse_onoff(&value))
                     };
+            }
+            FieldId::PathBasicAuthEnabled(host, path) => {
+                set_optional_basic_auth_enabled(
+                    &mut ensure_path(ensure_host(&mut self.config, &host), &path).basic_auth,
+                    value,
+                );
+            }
+            FieldId::PathBasicAuthRealm(host, path) => {
+                ensure_basic_auth(
+                    &mut ensure_path(ensure_host(&mut self.config, &host), &path).basic_auth,
+                )
+                .realm = value;
+            }
+            FieldId::PathBasicAuthUsers(host, path) => {
+                set_basic_auth_users(
+                    ensure_basic_auth(
+                        &mut ensure_path(ensure_host(&mut self.config, &host), &path).basic_auth,
+                    ),
+                    &value,
+                );
             }
             FieldId::BackendHost(host, index) => {
                 if let Some(backend) = ensure_host(&mut self.config, &host).backends.get_mut(index)
@@ -1590,6 +1665,30 @@ fn build_items(config: &Config) -> Vec<MenuItem> {
         FieldId::GlobalListenRaw,
         config,
     );
+    push_field(
+        &mut items,
+        1,
+        "basic-auth.enabled",
+        "ON/OFF enables global Basic auth; empty removes it.",
+        FieldId::GlobalBasicAuthEnabled,
+        config,
+    );
+    push_field(
+        &mut items,
+        1,
+        "basic-auth.realm",
+        "Global Basic auth realm.",
+        FieldId::GlobalBasicAuthRealm,
+        config,
+    );
+    push_field(
+        &mut items,
+        1,
+        "basic-auth.users",
+        "Comma-separated user:password pairs.",
+        FieldId::GlobalBasicAuthUsers,
+        config,
+    );
     push_header_sections(&mut items, 1, config, None, None);
 
     push_section(
@@ -1878,6 +1977,30 @@ fn build_items(config: &Config) -> Vec<MenuItem> {
                 FieldId::PathProxyPreserveHost(host_name.clone(), path_name.clone()),
                 config,
             );
+            push_field(
+                &mut items,
+                4,
+                "basic-auth.enabled",
+                "ON/OFF overrides inherited auth; empty inherits.",
+                FieldId::PathBasicAuthEnabled(host_name.clone(), path_name.clone()),
+                config,
+            );
+            push_field(
+                &mut items,
+                4,
+                "basic-auth.realm",
+                "Path Basic auth realm.",
+                FieldId::PathBasicAuthRealm(host_name.clone(), path_name.clone()),
+                config,
+            );
+            push_field(
+                &mut items,
+                4,
+                "basic-auth.users",
+                "Comma-separated user:password pairs.",
+                FieldId::PathBasicAuthUsers(host_name.clone(), path_name.clone()),
+                config,
+            );
             push_header_sections(
                 &mut items,
                 4,
@@ -2037,6 +2160,30 @@ fn build_items(config: &Config) -> Vec<MenuItem> {
             "health.latency-aware",
             "Enable latency-aware weighting.",
             FieldId::HostHealthLatencyAware(host_name.clone()),
+            config,
+        );
+        push_field(
+            &mut items,
+            2,
+            "basic-auth.enabled",
+            "ON/OFF overrides inherited auth; empty inherits.",
+            FieldId::HostBasicAuthEnabled(host_name.clone()),
+            config,
+        );
+        push_field(
+            &mut items,
+            2,
+            "basic-auth.realm",
+            "Host Basic auth realm.",
+            FieldId::HostBasicAuthRealm(host_name.clone()),
+            config,
+        );
+        push_field(
+            &mut items,
+            2,
+            "basic-auth.users",
+            "Comma-separated user:password pairs.",
+            FieldId::HostBasicAuthUsers(host_name.clone()),
             config,
         );
     }
@@ -2361,6 +2508,7 @@ static EMPTY_PATH: PathConfig = PathConfig {
     file_dirlisting: OnOff::Off,
     proxy_reverse_url: None,
     proxy_preserve_host: None,
+    basic_auth: None,
     header_set: HeaderValue(Vec::new()),
     header_setifempty: HeaderValue(Vec::new()),
     header_unset: HeaderValue(Vec::new()),
@@ -2382,6 +2530,7 @@ fn default_host() -> HostConfig {
         backends: Vec::new(),
         health: None,
         tls: None,
+        basic_auth: None,
         header_set: HeaderValue::default(),
         header_setifempty: HeaderValue::default(),
         header_unset: HeaderValue::default(),
@@ -2471,6 +2620,63 @@ fn ensure_health(host: &mut HostConfig) -> &mut HealthConfig {
 
 fn opt_health(host: &HostConfig) -> HealthConfig {
     host.health.clone().unwrap_or_default()
+}
+
+fn ensure_basic_auth(auth: &mut Option<BasicAuthConfig>) -> &mut BasicAuthConfig {
+    auth.get_or_insert_with(default_basic_auth)
+}
+
+fn default_basic_auth() -> BasicAuthConfig {
+    BasicAuthConfig {
+        enabled: OnOff::On,
+        realm: "pyx".to_string(),
+        users: IndexMap::new(),
+    }
+}
+
+fn basic_auth_enabled(auth: &Option<BasicAuthConfig>) -> String {
+    auth.as_ref()
+        .map(|auth| onoff(auth.enabled))
+        .unwrap_or_default()
+}
+
+fn basic_auth_realm(auth: &Option<BasicAuthConfig>) -> String {
+    auth.as_ref()
+        .map(|auth| auth.realm.clone())
+        .unwrap_or_default()
+}
+
+fn basic_auth_users(auth: &Option<BasicAuthConfig>) -> String {
+    auth.as_ref()
+        .map(|auth| {
+            auth.users
+                .iter()
+                .map(|(user, password)| format!("{user}:{password}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+fn set_optional_basic_auth_enabled(auth: &mut Option<BasicAuthConfig>, value: String) {
+    if value.trim().is_empty() {
+        *auth = None;
+    } else {
+        ensure_basic_auth(auth).enabled = parse_onoff(&value);
+    }
+}
+
+fn set_basic_auth_users(auth: &mut BasicAuthConfig, value: &str) {
+    auth.users.clear();
+    for pair in value.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+        if let Some((user, password)) = pair.split_once(':') {
+            let user = user.trim();
+            if !user.is_empty() {
+                auth.users
+                    .insert(user.to_string(), password.trim().to_string());
+            }
+        }
+    }
 }
 
 fn host_summary(host: &HostConfig) -> String {

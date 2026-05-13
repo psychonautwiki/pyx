@@ -285,6 +285,10 @@ pub struct Config {
     #[serde(default)]
     pub letsencrypt: LetsEncryptConfig,
 
+    /// Global HTTP Basic authentication settings
+    #[serde(default, rename = "basic-auth")]
+    pub basic_auth: Option<BasicAuthConfig>,
+
     /// Global headers to set if empty
     #[serde(default, rename = "header.setifempty")]
     pub header_setifempty: HeaderValue,
@@ -529,6 +533,57 @@ fn default_ssl_mode() -> String {
     "all".to_string()
 }
 
+/// HTTP Basic authentication configuration.
+///
+/// The nearest configured scope wins: path overrides host, and host overrides
+/// global. Use `enabled: OFF` on a narrower scope to disable inherited auth.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct BasicAuthConfig {
+    /// Enable this basic-auth rule. Defaults to ON when `basic-auth` is present.
+    #[serde(default = "default_basic_auth_enabled")]
+    pub enabled: OnOff,
+
+    /// Realm shown by clients in the password prompt.
+    #[serde(default = "default_basic_auth_realm")]
+    pub realm: String,
+
+    /// Username to password map.
+    #[serde(default)]
+    pub users: IndexMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedBasicAuth {
+    pub realm: String,
+    pub users: IndexMap<String, String>,
+}
+
+impl BasicAuthConfig {
+    fn resolve(&self, context: &str) -> anyhow::Result<Option<ResolvedBasicAuth>> {
+        if !self.enabled.is_on() {
+            return Ok(None);
+        }
+
+        if self.users.is_empty() {
+            anyhow::bail!("{context} basic-auth is enabled but has no users");
+        }
+
+        Ok(Some(ResolvedBasicAuth {
+            realm: self.realm.clone(),
+            users: self.users.clone(),
+        }))
+    }
+}
+
+fn default_basic_auth_enabled() -> OnOff {
+    OnOff::On
+}
+
+fn default_basic_auth_realm() -> String {
+    "pyx".to_string()
+}
+
 /// Listen configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ListenConfig {
@@ -621,6 +676,10 @@ pub struct HostConfig {
     #[serde(default)]
     pub tls: Option<TcpTlsConfig>,
 
+    /// Host-level HTTP Basic authentication settings
+    #[serde(default, rename = "basic-auth")]
+    pub basic_auth: Option<BasicAuthConfig>,
+
     /// Host-level headers
     #[serde(default, rename = "header.set")]
     pub header_set: HeaderValue,
@@ -670,6 +729,10 @@ pub struct PathConfig {
     /// Override preserve-host for this path
     #[serde(default, rename = "proxy.preserve-host")]
     pub proxy_preserve_host: Option<OnOff>,
+
+    /// Path-level HTTP Basic authentication settings
+    #[serde(default, rename = "basic-auth")]
+    pub basic_auth: Option<BasicAuthConfig>,
 
     /// Headers to set on response
     #[serde(default, rename = "header.set")]
@@ -862,6 +925,7 @@ pub struct ResolvedRoute {
     pub action: RouteAction,
     pub headers: HeaderRules,
     pub proxy_headers: HeaderRules,
+    pub auth: Option<ResolvedBasicAuth>,
     /// Parsed expires value (None = not set, Some(None) = "off", Some(Some(secs)) = max-age)
     pub expires: Option<Option<u64>>,
 }
@@ -1025,6 +1089,12 @@ impl Config {
             &self.header_merge,
             &self.header_unset,
         );
+        let global_basic_auth = self
+            .basic_auth
+            .as_ref()
+            .map(|auth| auth.resolve("global"))
+            .transpose()?
+            .flatten();
 
         let mut hosts = HashMap::new();
         let mut listeners = Vec::new();
@@ -1141,6 +1211,10 @@ impl Config {
                 &host_config.header_merge,
                 &host_config.header_unset,
             );
+            let host_basic_auth = match &host_config.basic_auth {
+                Some(auth) => auth.resolve(&format!("host {host_name}"))?,
+                None => global_basic_auth.clone(),
+            };
 
             // Sort paths by length descending for longest-prefix matching
             let mut paths: Vec<_> = host_config.paths.iter().collect();
@@ -1190,6 +1264,10 @@ impl Config {
                     &Default::default(),
                     &Default::default(),
                 );
+                let route_basic_auth = match &path_config.basic_auth {
+                    Some(auth) => auth.resolve(&format!("path {host_name}{path}"))?,
+                    None => host_basic_auth.clone(),
+                };
                 // Add proxy.header.add as well
                 let mut proxy_headers = proxy_headers;
                 for h in &path_config.proxy_header_add.0 {
@@ -1205,6 +1283,7 @@ impl Config {
                     action,
                     headers: path_headers,
                     proxy_headers,
+                    auth: route_basic_auth,
                     expires: parse_expires(&path_config.expires),
                 });
             }
@@ -1969,6 +2048,69 @@ hosts:
     }
 
     #[test]
+    fn test_resolve_basic_auth_inheritance_and_disable() {
+        let yaml = r#"
+basic-auth:
+  realm: global-area
+  users:
+    alice: secret
+hosts:
+  "example.com:80":
+    listen:
+      host: 0.0.0.0
+      port: 80
+    basic-auth:
+      realm: host-area
+      users:
+        bob: hunter2
+    paths:
+      "/private":
+        status: ON
+      "/public":
+        status: ON
+        basic-auth:
+          enabled: OFF
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let resolved = config.resolve().unwrap();
+        let host = resolved.hosts.get("example.com:80").unwrap();
+
+        let private = host
+            .routes
+            .iter()
+            .find(|route| route.path == "/private")
+            .unwrap();
+        let private_auth = private.auth.as_ref().unwrap();
+        assert_eq!(private_auth.realm, "host-area");
+        assert_eq!(
+            private_auth.users.get("bob").map(String::as_str),
+            Some("hunter2")
+        );
+
+        let public = host
+            .routes
+            .iter()
+            .find(|route| route.path == "/public")
+            .unwrap();
+        assert!(public.auth.is_none());
+    }
+
+    #[test]
+    fn test_resolve_basic_auth_requires_users_when_enabled() {
+        let yaml = r#"
+basic-auth:
+  realm: empty
+hosts:
+  "example.com:80":
+    paths:
+      "/":
+        status: ON
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.resolve().is_err());
+    }
+
+    #[test]
     fn test_resolve_header_rules_inheritance() {
         let yaml = r#"
 header.set: "X-Global: global"
@@ -2074,8 +2216,14 @@ hosts:
         assert!(listener.tls_config.is_some());
 
         let tls = listener.tls_config.as_ref().unwrap();
-        assert_eq!(tls.cert_path.as_ref().unwrap(), &PathBuf::from("/tls/cert.pem"));
-        assert_eq!(tls.key_path.as_ref().unwrap(), &PathBuf::from("/tls/key.pem"));
+        assert_eq!(
+            tls.cert_path.as_ref().unwrap(),
+            &PathBuf::from("/tls/cert.pem")
+        );
+        assert_eq!(
+            tls.key_path.as_ref().unwrap(),
+            &PathBuf::from("/tls/key.pem")
+        );
         assert!(!tls.letsencrypt);
     }
 
@@ -2148,8 +2296,14 @@ key-file: /tls/key.pem
         assert!(ssl.cipher_suite.is_none());
         assert!(ssl.dh_file.is_none());
         assert_eq!(ssl.ocsp_update_interval, 0);
-        assert_eq!(ssl.certificate_file.as_ref().unwrap(), &PathBuf::from("/tls/cert.pem"));
-        assert_eq!(ssl.key_file.as_ref().unwrap(), &PathBuf::from("/tls/key.pem"));
+        assert_eq!(
+            ssl.certificate_file.as_ref().unwrap(),
+            &PathBuf::from("/tls/cert.pem")
+        );
+        assert_eq!(
+            ssl.key_file.as_ref().unwrap(),
+            &PathBuf::from("/tls/key.pem")
+        );
         assert!(!ssl.sni_fallback.is_on()); // Secure by default
         assert!(!ssl.letsencrypt.is_on());
     }
@@ -2172,8 +2326,14 @@ ocsp-update-interval: 3600
         assert_eq!(ssl.cipher_suite, Some("TLS_AES_256_GCM_SHA384".to_string()));
         assert_eq!(ssl.dh_file, Some(PathBuf::from("/tls/dhparams.pem")));
         assert_eq!(ssl.ocsp_update_interval, 3600);
-        assert_eq!(ssl.certificate_file.as_ref().unwrap(), &PathBuf::from("/tls/cert.pem"));
-        assert_eq!(ssl.key_file.as_ref().unwrap(), &PathBuf::from("/tls/key.pem"));
+        assert_eq!(
+            ssl.certificate_file.as_ref().unwrap(),
+            &PathBuf::from("/tls/cert.pem")
+        );
+        assert_eq!(
+            ssl.key_file.as_ref().unwrap(),
+            &PathBuf::from("/tls/key.pem")
+        );
     }
 
     #[test]
@@ -2206,7 +2366,10 @@ hosts: {}
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert!(!config.letsencrypt.enabled.is_on());
-        assert_eq!(config.letsencrypt.cache_dir, PathBuf::from("/var/lib/styx/letsencrypt"));
+        assert_eq!(
+            config.letsencrypt.cache_dir,
+            PathBuf::from("/var/lib/styx/letsencrypt")
+        );
         assert_eq!(config.letsencrypt.renew_before_days, 30);
         assert_eq!(config.letsencrypt.check_interval_seconds, 43200);
     }
@@ -2229,7 +2392,10 @@ hosts: {}
 
         assert!(config.letsencrypt.enabled.is_on());
         assert_eq!(config.letsencrypt.contact, vec!["mailto:admin@example.com"]);
-        assert_eq!(config.letsencrypt.cache_dir, PathBuf::from("/tmp/styx-acme"));
+        assert_eq!(
+            config.letsencrypt.cache_dir,
+            PathBuf::from("/tmp/styx-acme")
+        );
         assert!(config.letsencrypt.staging.is_on());
         assert!(config.letsencrypt.terms_of_service_agreed.is_on());
         assert_eq!(config.letsencrypt.renew_before_days, 14);

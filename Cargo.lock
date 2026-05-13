@@ -2041,6 +2041,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-compression",
+ "base64",
  "bytes",
  "chrono",
  "clap",

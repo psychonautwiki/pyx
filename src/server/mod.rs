@@ -5,32 +5,32 @@
 
 pub mod static_files;
 
-use crate::config::{HeaderRules, ResolvedConfig, RouteAction};
 use crate::acme::AcmeManager;
+use crate::config::{HeaderRules, ResolvedConfig, RouteAction};
 use crate::middleware::{
-    apply_expires, apply_response_headers, default_security_headers, error_response,
-    redirect_response, status_response,
+    apply_expires, apply_response_headers, basic_auth_challenge_response, default_security_headers,
+    error_response, is_basic_auth_authorized, redirect_response, status_response,
 };
 use crate::proxy::{
-    bidirectional_copy, is_websocket_upgrade, ProxyConfig, ProxyError, ReverseProxy,
-    WebSocketUpgradeResult,
+    ProxyConfig, ProxyError, ReverseProxy, WebSocketUpgradeResult, bidirectional_copy,
+    is_websocket_upgrade,
 };
 use crate::routing::{MatchResult, Router};
 use crate::tls::{NegotiatedProtocol, TlsManager};
 use bytes::Bytes;
-use http::{header, HeaderValue, Request, Response, StatusCode};
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use http::{HeaderValue, Request, Response, StatusCode, header};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use lru::LruCache;
-use std::num::NonZeroUsize;
-use static_files::{serve_static, StaticFileConfig};
+use static_files::{StaticFileConfig, serve_static};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
@@ -62,8 +62,14 @@ fn normalize_ip_for_rate_limiting(ip: IpAddr) -> IpAddr {
             // Extract first 64 bits (8 bytes) and zero out the rest
             let segments = ipv6.segments();
             let normalized = std::net::Ipv6Addr::new(
-                segments[0], segments[1], segments[2], segments[3],
-                0, 0, 0, 0
+                segments[0],
+                segments[1],
+                segments[2],
+                segments[3],
+                0,
+                0,
+                0,
+                0,
             );
             IpAddr::V6(normalized)
         }
@@ -121,9 +127,9 @@ impl Server {
             global_headers,
             connection_semaphore: Arc::new(Semaphore::new(max_connections)),
             // Bounded LRU cache: max 100k IPs to prevent memory exhaustion
-            ip_rate_limits: Arc::new(parking_lot::Mutex::new(
-                LruCache::new(NonZeroUsize::new(100_000).unwrap())
-            )),
+            ip_rate_limits: Arc::new(parking_lot::Mutex::new(LruCache::new(
+                NonZeroUsize::new(100_000).unwrap(),
+            ))),
         })
     }
 
@@ -197,7 +203,9 @@ impl Server {
             for (host_name, host_value) in &self.raw_config.hosts {
                 // Check if this host has SSL configuration
                 if let Some(listen_value) = &host_value.listen {
-                    if let Ok(listen_config) = serde_yaml::from_value::<crate::config::ListenConfig>(listen_value.clone()) {
+                    if let Ok(listen_config) =
+                        serde_yaml::from_value::<crate::config::ListenConfig>(listen_value.clone())
+                    {
                         // Check if this listen config matches our listener's address
                         if listen_config.socket_addr() == addr {
                             // This host uses this listener - load its certificate if it has SSL
@@ -208,8 +216,9 @@ impl Server {
                                     if let (Some(cert_file), Some(key_file)) =
                                         (&ssl.certificate_file, &ssl.key_file)
                                     {
-                                        if let Err(err) =
-                                            self.tls_manager.load_cert(hostname, cert_file, key_file)
+                                        if let Err(err) = self
+                                            .tls_manager
+                                            .load_cert(hostname, cert_file, key_file)
                                         {
                                             warn!(
                                                 "Failed to load TLS certificate for {}: {}",
@@ -261,14 +270,21 @@ impl Server {
 
             let ip_limit = {
                 let mut cache = self.ip_rate_limits.lock();
-                cache.get_or_insert(ip_addr, || Arc::new(IpRateLimit {
-                    connections: AtomicUsize::new(0),
-                })).clone()
+                cache
+                    .get_or_insert(ip_addr, || {
+                        Arc::new(IpRateLimit {
+                            connections: AtomicUsize::new(0),
+                        })
+                    })
+                    .clone()
             };
 
             let ip_conns = ip_limit.connections.fetch_add(1, Ordering::Relaxed);
             if ip_conns >= MAX_CONNECTIONS_PER_IP {
-                warn!("Per-IP connection limit reached for {}, rejecting", peer_addr);
+                warn!(
+                    "Per-IP connection limit reached for {}, rejecting",
+                    peer_addr
+                );
                 ip_limit.connections.fetch_sub(1, Ordering::Relaxed);
                 drop(stream);
                 continue;
@@ -285,14 +301,19 @@ impl Server {
                 }
             };
 
-            self.stats.active_connections.fetch_add(1, Ordering::Relaxed);
+            self.stats
+                .active_connections
+                .fetch_add(1, Ordering::Relaxed);
 
             let server = Arc::clone(&self);
             let tls_acceptor = tls_acceptor.clone();
 
             tokio::spawn(async move {
                 let result = if let Some(acceptor) = tls_acceptor {
-                    server.clone().handle_tls_connection(stream, peer_addr, acceptor).await
+                    server
+                        .clone()
+                        .handle_tls_connection(stream, peer_addr, acceptor)
+                        .await
                 } else {
                     server.clone().handle_connection(stream, peer_addr).await
                 };
@@ -302,7 +323,10 @@ impl Server {
                     server.stats.errors.fetch_add(1, Ordering::Relaxed);
                 }
 
-                server.stats.active_connections.fetch_sub(1, Ordering::Relaxed);
+                server
+                    .stats
+                    .active_connections
+                    .fetch_sub(1, Ordering::Relaxed);
                 ip_limit.connections.fetch_sub(1, Ordering::Relaxed);
                 drop(permit);
             });
@@ -326,26 +350,29 @@ impl Server {
 
         // Serve connection
         // Use with_upgrades() to support WebSocket upgrades
-        builder.serve_connection(
-            io,
-            service_fn(move |req| {
-                let server = Arc::clone(&server);
-                // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
-                async move {
-                    tokio::time::timeout(
-                        Duration::from_secs(120),
-                        server.handle_request(req, peer_addr, false)
-                    )
-                    .await
-                    .unwrap_or_else(|_| {
-                        Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
-                            .map(|body| body.map_err(|e| match e {}).boxed()))
-                    })
-                }
-            }),
-        )
-        .with_upgrades()
-        .await?;
+        builder
+            .serve_connection(
+                io,
+                service_fn(move |req| {
+                    let server = Arc::clone(&server);
+                    // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
+                    async move {
+                        tokio::time::timeout(
+                            Duration::from_secs(120),
+                            server.handle_request(req, peer_addr, false),
+                        )
+                        .await
+                        .unwrap_or_else(|_| {
+                            Ok(
+                                error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
+                                    .map(|body| body.map_err(|e| match e {}).boxed()),
+                            )
+                        })
+                    }
+                }),
+            )
+            .with_upgrades()
+            .await?;
 
         Ok(())
     }
@@ -362,30 +389,28 @@ impl Server {
         self.tls_manager.record_handshake_start();
 
         // TLS handshake with timeout
-        let tls_stream = match tokio::time::timeout(
-            Duration::from_secs(10),
-            acceptor.accept(stream),
-        )
-        .await
-        {
-            Ok(Ok(stream)) => {
-                self.tls_manager.record_handshake_complete();
-                stream
-            }
-            Ok(Err(e)) => {
-                self.tls_manager.record_handshake_failed();
-                return Err(anyhow::anyhow!("TLS handshake failed: {}", e));
-            }
-            Err(_) => {
-                self.tls_manager.record_handshake_failed();
-                return Err(anyhow::anyhow!("TLS handshake timeout"));
-            }
-        };
+        let tls_stream =
+            match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
+                Ok(Ok(stream)) => {
+                    self.tls_manager.record_handshake_complete();
+                    stream
+                }
+                Ok(Err(e)) => {
+                    self.tls_manager.record_handshake_failed();
+                    return Err(anyhow::anyhow!("TLS handshake failed: {}", e));
+                }
+                Err(_) => {
+                    self.tls_manager.record_handshake_failed();
+                    return Err(anyhow::anyhow!("TLS handshake timeout"));
+                }
+            };
 
         // Check if HTTP/2 is enabled in config
         if !self.config.http2.enabled {
             // HTTP/2 disabled, always use HTTP/1.1
-            return self.handle_http1_tls_connection(tls_stream, peer_addr).await;
+            return self
+                .handle_http1_tls_connection(tls_stream, peer_addr)
+                .await;
         }
 
         // Determine negotiated protocol from ALPN
@@ -397,11 +422,10 @@ impl Server {
         trace!("TLS connection from {} using {:?}", peer_addr, protocol);
 
         match protocol {
-            NegotiatedProtocol::H2 => {
-                self.handle_http2_connection(tls_stream, peer_addr).await
-            }
+            NegotiatedProtocol::H2 => self.handle_http2_connection(tls_stream, peer_addr).await,
             NegotiatedProtocol::Http1 => {
-                self.handle_http1_tls_connection(tls_stream, peer_addr).await
+                self.handle_http1_tls_connection(tls_stream, peer_addr)
+                    .await
             }
         }
     }
@@ -424,26 +448,29 @@ impl Server {
 
         // Serve connection
         // Use with_upgrades() to support WebSocket upgrades (wss://)
-        builder.serve_connection(
-            io,
-            service_fn(move |req| {
-                let server = Arc::clone(&server);
-                // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
-                async move {
-                    tokio::time::timeout(
-                        Duration::from_secs(120),
-                        server.handle_request(req, peer_addr, true)
-                    )
-                    .await
-                    .unwrap_or_else(|_| {
-                        Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
-                            .map(|body| body.map_err(|e| match e {}).boxed()))
-                    })
-                }
-            }),
-        )
-        .with_upgrades()
-        .await?;
+        builder
+            .serve_connection(
+                io,
+                service_fn(move |req| {
+                    let server = Arc::clone(&server);
+                    // Per-request timeout (2 minutes) - but WebSocket upgrades bypass this
+                    async move {
+                        tokio::time::timeout(
+                            Duration::from_secs(120),
+                            server.handle_request(req, peer_addr, true),
+                        )
+                        .await
+                        .unwrap_or_else(|_| {
+                            Ok(
+                                error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
+                                    .map(|body| body.map_err(|e| match e {}).boxed()),
+                            )
+                        })
+                    }
+                }),
+            )
+            .with_upgrades()
+            .await?;
 
         Ok(())
     }
@@ -474,25 +501,28 @@ impl Server {
             .max_frame_size(h2_config.max_frame_size);
 
         // Serve connection
-        builder.serve_connection(
-            io,
-            service_fn(move |req| {
-                let server = Arc::clone(&server);
-                // Per-request timeout (2 minutes)
-                async move {
-                    tokio::time::timeout(
-                        Duration::from_secs(120),
-                        server.handle_request(req, peer_addr, true)
-                    )
-                    .await
-                    .unwrap_or_else(|_| {
-                        Ok(error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
-                            .map(|body| body.map_err(|e| match e {}).boxed()))
-                    })
-                }
-            }),
-        )
-        .await?;
+        builder
+            .serve_connection(
+                io,
+                service_fn(move |req| {
+                    let server = Arc::clone(&server);
+                    // Per-request timeout (2 minutes)
+                    async move {
+                        tokio::time::timeout(
+                            Duration::from_secs(120),
+                            server.handle_request(req, peer_addr, true),
+                        )
+                        .await
+                        .unwrap_or_else(|_| {
+                            Ok(
+                                error_response(StatusCode::REQUEST_TIMEOUT, "Request timeout")
+                                    .map(|body| body.map_err(|e| match e {}).boxed()),
+                            )
+                        })
+                    }
+                }),
+            )
+            .await?;
 
         Ok(())
     }
@@ -500,7 +530,7 @@ impl Server {
     /// Handle a single HTTP request (streaming)
     async fn handle_request(
         self: Arc<Self>,
-        request: Request<Incoming>,
+        mut request: Request<Incoming>,
         peer_addr: SocketAddr,
         is_tls: bool,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
@@ -549,7 +579,13 @@ impl Server {
             }
         }
 
-        trace!("Request: {} {} {} from {}", request.method(), host, path, peer_addr);
+        trace!(
+            "Request: {} {} {} from {}",
+            request.method(),
+            host,
+            path,
+            peer_addr
+        );
 
         // Route the request
         let result = match self.router.route(&host, path) {
@@ -561,9 +597,22 @@ impl Server {
             }
         };
 
+        if let Some(auth) = &result.auth {
+            if !is_basic_auth_authorized(request.headers(), auth) {
+                debug!("Basic auth failed for {} {}", host, path);
+                let resp = basic_auth_challenge_response(&auth.realm);
+                return Ok(resp.map(|body| body.map_err(|e| match e {}).boxed()));
+            }
+
+            request.headers_mut().remove(header::AUTHORIZATION);
+        }
+
         // Execute the action
         let client_scheme = if is_tls { "https" } else { "http" };
-        let response = match self.execute_action(request, &result, peer_addr, client_scheme).await {
+        let response = match self
+            .execute_action(request, &result, peer_addr, client_scheme)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 warn!("Request error: {}", e);
@@ -602,7 +651,12 @@ impl Server {
                 Ok(response.map(|body| body.map_err(|e| match e {}).boxed()))
             }
 
-            RouteAction::StaticFiles { dir, index, send_gzip, dirlisting } => {
+            RouteAction::StaticFiles {
+                dir,
+                index,
+                send_gzip,
+                dirlisting,
+            } => {
                 let config = StaticFileConfig {
                     root: dir.clone(),
                     index: index.clone(),
@@ -637,23 +691,31 @@ impl Server {
                                         panic!("Stream error: {}", other)
                                     }
                                 }
-                            }).boxed()
+                            })
+                            .boxed()
                         }))
                     }
                     Err(e) => {
                         let status = e.status_code();
                         let msg = e.to_string();
-                        Ok(error_response(status, &msg).map(|body| body.map_err(|e| match e {}).boxed()))
+                        Ok(error_response(status, &msg)
+                            .map(|body| body.map_err(|e| match e {}).boxed()))
                     }
                 }
             }
 
-            RouteAction::Proxy { upstream, preserve_host } => {
+            RouteAction::Proxy {
+                upstream,
+                preserve_host,
+            } => {
                 let merged_response_headers = self.global_headers.merge_with(&route.headers);
 
                 // Check if this is a WebSocket upgrade request
                 if is_websocket_upgrade(&request) {
-                    trace!("WebSocket upgrade request from {} to {}", peer_addr, upstream);
+                    trace!(
+                        "WebSocket upgrade request from {} to {}",
+                        peer_addr, upstream
+                    );
 
                     // Extract info we need from the request BEFORE getting the OnUpgrade
                     let method = request.method().clone();
@@ -679,7 +741,9 @@ impl Server {
                         .await?;
 
                     return match result {
-                        WebSocketUpgradeResult::Upgraded { upstream: mut upstream_conn } => {
+                        WebSocketUpgradeResult::Upgraded {
+                            upstream: mut upstream_conn,
+                        } => {
                             // Build a 101 Switching Protocols response
                             let response = Response::builder()
                                 .status(StatusCode::SWITCHING_PROTOCOLS)
@@ -688,7 +752,10 @@ impl Server {
                                 .body(Full::new(Bytes::new()).map_err(|e| match e {}).boxed())
                                 .unwrap();
 
-                            debug!("WebSocket upgrade to {} successful, starting tunnel", upstream);
+                            debug!(
+                                "WebSocket upgrade to {} successful, starting tunnel",
+                                upstream
+                            );
 
                             // Spawn a task to handle the bidirectional copy after upgrade completes
                             let upstream_str = upstream.clone();
@@ -698,7 +765,8 @@ impl Server {
                                     Ok(upgraded) => {
                                         let client = TokioIo::new(upgraded);
                                         // Bidirectionally copy data between client and upstream
-                                        match bidirectional_copy(client, &mut *upstream_conn).await {
+                                        match bidirectional_copy(client, &mut *upstream_conn).await
+                                        {
                                             Ok((sent, recv)) => {
                                                 debug!(
                                                     "WebSocket tunnel to {} closed (sent: {}, recv: {})",
@@ -721,9 +789,16 @@ impl Server {
 
                             Ok(response)
                         }
-                        WebSocketUpgradeResult::Rejected { status, headers, body } => {
+                        WebSocketUpgradeResult::Rejected {
+                            status,
+                            headers,
+                            body,
+                        } => {
                             // Upstream rejected the upgrade - return their response
-                            debug!("WebSocket upgrade to {} rejected with status {}", upstream, status);
+                            debug!(
+                                "WebSocket upgrade to {} rejected with status {}",
+                                upstream, status
+                            );
                             let mut builder = Response::builder().status(status);
                             for (name, value) in headers.iter() {
                                 builder = builder.header(name.clone(), value.clone());
@@ -746,7 +821,7 @@ impl Server {
                         &route.proxy_headers,
                         &merged_response_headers,
                         Some(peer_addr.ip()), // Pass client IP for X-Forwarded-For
-                        client_scheme, // Pass client scheme for X-Forwarded-Proto
+                        client_scheme,        // Pass client scheme for X-Forwarded-Proto
                     )
                     .await?;
 
@@ -758,7 +833,6 @@ impl Server {
             }
         }
     }
-
 }
 
 #[cfg(test)]

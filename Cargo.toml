@@ -43,6 +43,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2.0"
 anyhow = "1.0"
+base64 = "0.22"
 parking_lot = "0.12"
 dashmap = "6.1"
 arc-swap = "1.7"
