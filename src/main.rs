@@ -2,9 +2,10 @@
 //!
 //! A drop-in replacement for h2o with compatible configuration format.
 
-mod config;
 mod acme;
+mod config;
 mod http3;
+mod menu;
 mod middleware;
 mod pool;
 mod proxy;
@@ -13,10 +14,10 @@ mod server;
 mod tcp_proxy;
 mod tls;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing::{error, info, Level};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing::{Level, error, info};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 static MOTD: &str = r#"
       __   _               _   _     _
@@ -31,6 +32,9 @@ static MOTD: &str = r#"
 #[command(name = "pyx")]
 #[command(author, version, about = "High-performance reverse proxy", long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Configuration file path
     #[arg(short, long, default_value = "/etc/pyx/pyx.yaml")]
     config: PathBuf,
@@ -60,6 +64,15 @@ struct Args {
     port: u16,
 }
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Open the interactive configuration wizard
+    Menu {
+        /// Configuration file to create or edit
+        target_config_file: PathBuf,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     println!("{}", MOTD);
 
@@ -74,6 +87,10 @@ fn main() -> anyhow::Result<()> {
     init_logging(&args.log_level, args.json_logs)?;
 
     info!("pyx reverse proxy v{}", env!("CARGO_PKG_VERSION"));
+
+    if let Some(Command::Menu { target_config_file }) = args.command {
+        return menu::run_menu(target_config_file);
+    }
 
     // Quick static server mode
     if let Some(serve_dir) = args.serve_dir {
@@ -139,13 +156,19 @@ fn main() -> anyhow::Result<()> {
                     tcp_handles.push(handle);
                 }
                 Err(e) => {
-                    error!("Failed to create TCP proxy for {}: {}", tcp_listener.addr, e);
+                    error!(
+                        "Failed to create TCP proxy for {}: {}",
+                        tcp_listener.addr, e
+                    );
                 }
             }
         }
 
         if !resolved.tcp_listeners.is_empty() {
-            info!("Started {} TCP proxy listeners", resolved.tcp_listeners.len());
+            info!(
+                "Started {} TCP proxy listeners",
+                resolved.tcp_listeners.len()
+            );
         }
 
         // Start HTTP server (only if there are HTTP hosts)
@@ -158,11 +181,8 @@ fn main() -> anyhow::Result<()> {
             let h3_router = server.router();
             let h3_proxy = server.proxy();
 
-            let h3_server = std::sync::Arc::new(http3::Http3Server::new(
-                h3_config,
-                h3_router,
-                h3_proxy,
-            ));
+            let h3_server =
+                std::sync::Arc::new(http3::Http3Server::new(h3_config, h3_router, h3_proxy));
 
             tokio::spawn(async move {
                 if let Err(e) = h3_server.run().await {
@@ -216,15 +236,14 @@ fn run_quick_static_server(dir: PathBuf, port: u16, workers: usize) -> anyhow::R
     use hyper::server::conn::http1;
     use hyper::service::service_fn;
     use hyper_util::rt::TokioIo;
-    use server::static_files::{serve_static, StaticFileConfig, StaticFileError};
+    use server::static_files::{StaticFileConfig, StaticFileError, serve_static};
     use std::convert::Infallible;
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
 
     // Resolve directory path
-    let root = std::fs::canonicalize(&dir).map_err(|e| {
-        anyhow::anyhow!("Cannot access directory '{}': {}", dir.display(), e)
-    })?;
+    let root = std::fs::canonicalize(&dir)
+        .map_err(|e| anyhow::anyhow!("Cannot access directory '{}': {}", dir.display(), e))?;
 
     info!("Quick static server mode");
     info!("Serving files from: {}", root.display());
@@ -303,10 +322,7 @@ fn run_quick_static_server(dir: PathBuf, port: u16, workers: usize) -> anyhow::R
                 });
 
                 let io = TokioIo::new(stream);
-                if let Err(e) = http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await
-                {
+                if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
                     if !e.to_string().contains("connection closed") {
                         error!("Connection error from {}: {}", remote_addr, e);
                     }
