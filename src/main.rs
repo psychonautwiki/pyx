@@ -11,6 +11,7 @@ mod pool;
 mod proxy;
 mod routing;
 mod server;
+mod systemd;
 mod tcp_proxy;
 mod tls;
 
@@ -71,6 +72,58 @@ enum Command {
         /// Configuration file to create or edit
         target_config_file: PathBuf,
     },
+
+    /// Install or remove a systemd service
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ServiceCommand {
+    /// Install and optionally start a systemd service for a config file
+    #[command(alias = "setup")]
+    Install {
+        /// Configuration file the service should run with
+        config_file: PathBuf,
+
+        /// systemd unit name
+        #[arg(long, default_value = "pyx")]
+        name: String,
+
+        /// Directory where the unit file is written
+        #[arg(long, default_value = "/etc/systemd/system")]
+        unit_dir: PathBuf,
+
+        /// Write the unit but do not enable it at boot
+        #[arg(long)]
+        no_enable: bool,
+
+        /// Write the unit but do not start or restart it
+        #[arg(long)]
+        no_start: bool,
+    },
+
+    /// Stop, disable, and remove a systemd service
+    #[command(alias = "uninstall")]
+    Remove {
+        /// systemd unit name
+        #[arg(long, default_value = "pyx")]
+        name: String,
+
+        /// Directory where the unit file is located
+        #[arg(long, default_value = "/etc/systemd/system")]
+        unit_dir: PathBuf,
+
+        /// Remove the unit but do not stop the running service
+        #[arg(long)]
+        no_stop: bool,
+
+        /// Remove the unit but do not disable it at boot
+        #[arg(long)]
+        no_disable: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -88,8 +141,36 @@ fn main() -> anyhow::Result<()> {
 
     info!("pyx reverse proxy v{}", env!("CARGO_PKG_VERSION"));
 
-    if let Some(Command::Menu { target_config_file }) = args.command {
-        return menu::run_menu(target_config_file);
+    if let Some(command) = args.command {
+        return match command {
+            Command::Menu { target_config_file } => menu::run_menu(target_config_file),
+            Command::Service { command } => match command {
+                ServiceCommand::Install {
+                    config_file,
+                    name,
+                    unit_dir,
+                    no_enable,
+                    no_start,
+                } => systemd::install(systemd::InstallOptions {
+                    config_file,
+                    name,
+                    unit_dir,
+                    enable: !no_enable,
+                    start: !no_start,
+                }),
+                ServiceCommand::Remove {
+                    name,
+                    unit_dir,
+                    no_stop,
+                    no_disable,
+                } => systemd::remove(systemd::RemoveOptions {
+                    name,
+                    unit_dir,
+                    stop: !no_stop,
+                    disable: !no_disable,
+                }),
+            },
+        };
     }
 
     // Quick static server mode
