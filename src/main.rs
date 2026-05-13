@@ -3,6 +3,7 @@
 //! A drop-in replacement for h2o with compatible configuration format.
 
 mod config;
+mod acme;
 mod http3;
 mod middleware;
 mod pool;

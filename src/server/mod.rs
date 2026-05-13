@@ -6,6 +6,7 @@
 pub mod static_files;
 
 use crate::config::{HeaderRules, ResolvedConfig, RouteAction};
+use crate::acme::AcmeManager;
 use crate::middleware::{
     apply_expires, apply_response_headers, default_security_headers, error_response,
     redirect_response, status_response,
@@ -76,6 +77,7 @@ pub struct Server {
     router: Arc<Router>,
     proxy: Arc<ReverseProxy>,
     tls_manager: Arc<TlsManager>,
+    acme_manager: Option<Arc<AcmeManager>>,
     stats: Arc<ServerStats>,
     global_headers: HeaderRules,
     /// Connection limiter for DoS protection
@@ -99,6 +101,7 @@ impl Server {
         let proxy = ReverseProxy::new(proxy_config);
 
         let tls_manager = Arc::new(TlsManager::with_default_fallback(config.sni_fallback));
+        let acme_manager = AcmeManager::from_config(&raw_config, Arc::clone(&tls_manager));
 
         // Merge global headers with security defaults
         let global_headers = default_security_headers().merge_with(&config.global_headers);
@@ -113,6 +116,7 @@ impl Server {
             router,
             proxy,
             tls_manager,
+            acme_manager,
             stats: Arc::new(ServerStats::default()),
             global_headers,
             connection_semaphore: Arc::new(Semaphore::new(max_connections)),
@@ -139,6 +143,10 @@ impl Server {
 
         let mut handles = Vec::new();
 
+        if let Some(acme_manager) = &self.acme_manager {
+            acme_manager.load_cached_certificates();
+        }
+
         // Note: LRU cache automatically evicts old entries, no cleanup task needed
 
         // Start listeners
@@ -156,6 +164,10 @@ impl Server {
             handles.push(handle);
         }
 
+        if let Some(acme_manager) = &self.acme_manager {
+            Arc::clone(acme_manager).start();
+        }
+
         // Wait for all listeners
         for handle in handles {
             handle.await?;
@@ -171,7 +183,12 @@ impl Server {
         tls_config: Option<Arc<crate::config::TlsListenerConfig>>,
     ) -> anyhow::Result<()> {
         let listener = TcpListener::bind(addr).await?;
-        info!("Listening on {}{}", addr, if tls_config.is_some() { " (TLS)" } else { "" });
+        let tls_label = match tls_config.as_ref() {
+            Some(cfg) if cfg.letsencrypt => " (TLS, Let's Encrypt)",
+            Some(_) => " (TLS)",
+            None => "",
+        };
+        info!("Listening on {}{}", addr, tls_label);
 
         // Build TLS acceptor if needed
         let tls_acceptor = if tls_config.is_some() {
@@ -188,10 +205,28 @@ impl Server {
                                 // Parse hostname from "hostname:port" format
                                 if let Some(colon_pos) = host_name.rfind(':') {
                                     let hostname = &host_name[..colon_pos];
-                                    // Load this host's specific certificate
-                                    self.tls_manager
-                                        .load_cert(hostname, &ssl.certificate_file, &ssl.key_file)?;
-                                    info!("Loaded TLS certificate for {}", hostname);
+                                    if let (Some(cert_file), Some(key_file)) =
+                                        (&ssl.certificate_file, &ssl.key_file)
+                                    {
+                                        if let Err(err) =
+                                            self.tls_manager.load_cert(hostname, cert_file, key_file)
+                                        {
+                                            warn!(
+                                                "Failed to load TLS certificate for {}: {}",
+                                                hostname, err
+                                            );
+                                        }
+                                    } else if ssl.letsencrypt.is_on() {
+                                        debug!(
+                                            "TLS certificate for {} will be provided by Let's Encrypt",
+                                            hostname
+                                        );
+                                    } else {
+                                        warn!(
+                                            "TLS certificate paths missing for {}; handshakes for this host will fail",
+                                            hostname
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -502,6 +537,17 @@ impl Server {
         };
 
         let path = request.uri().path();
+
+        if let Some(acme_manager) = &self.acme_manager {
+            if let Some(body) = acme_manager.challenge_response(path) {
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/plain")
+                    .body(Full::new(Bytes::from(body)).map_err(|e| match e {}).boxed())
+                    .unwrap();
+                return Ok(response);
+            }
+        }
 
         trace!("Request: {} {} {} from {}", request.method(), host, path, peer_addr);
 

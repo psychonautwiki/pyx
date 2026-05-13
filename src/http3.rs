@@ -162,8 +162,17 @@ impl Http3Server {
         tls_config: &TlsListenerConfig,
     ) -> anyhow::Result<quinn::ServerConfig> {
         // Load certificates
-        let cert_file = File::open(&tls_config.cert_path)
-            .map_err(|e| anyhow::anyhow!("Failed to open cert file {:?}: {}", tls_config.cert_path, e))?;
+        let cert_path = tls_config
+            .cert_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("HTTP/3 requires a certificate file at startup"))?;
+        let key_path = tls_config
+            .key_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("HTTP/3 requires a key file at startup"))?;
+
+        let cert_file = File::open(cert_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open cert file {:?}: {}", cert_path, e))?;
         let mut cert_reader = BufReader::new(cert_file);
 
         let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
@@ -171,12 +180,12 @@ impl Http3Server {
             .collect();
 
         if certs.is_empty() {
-            anyhow::bail!("No certificates found in {:?}", tls_config.cert_path);
+            anyhow::bail!("No certificates found in {:?}", cert_path);
         }
 
         // Load private key
-        let key_file = File::open(&tls_config.key_path)
-            .map_err(|e| anyhow::anyhow!("Failed to open key file {:?}: {}", tls_config.key_path, e))?;
+        let key_file = File::open(key_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open key file {:?}: {}", key_path, e))?;
         let mut key_reader = BufReader::new(key_file);
 
         let key = load_private_key(&mut key_reader)?;

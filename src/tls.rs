@@ -21,7 +21,7 @@ use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::ServerConfig;
 use std::fmt;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -192,6 +192,26 @@ impl TlsManager {
         Ok(())
     }
 
+    /// Load a certificate and key from PEM strings for a hostname
+    pub fn load_cert_pem(
+        &self,
+        hostname: &str,
+        cert_pem: &str,
+        key_pem: &str,
+    ) -> anyhow::Result<()> {
+        let certified_key = load_certified_key_from_pem(cert_pem, key_pem)?;
+        let certified_key = Arc::new(certified_key);
+
+        self.resolver.add_cert(hostname, certified_key.clone());
+
+        if self.resolver.default_cert.read().is_none() {
+            self.resolver.set_default(certified_key);
+        }
+
+        info!("Loaded TLS certificate for {}", hostname);
+        Ok(())
+    }
+
     /// Build the server configuration with ALPN support for HTTP/2
     pub fn build_server_config(&self) -> anyhow::Result<Arc<ServerConfig>> {
         let mut config = ServerConfig::builder()
@@ -259,6 +279,28 @@ fn load_certified_key(
     let key = load_private_key(&mut key_reader)?;
 
     // Create signing key
+    let signing_key = rustls::crypto::ring::sign::any_supported_type(&key)
+        .map_err(|e| anyhow::anyhow!("Invalid private key: {:?}", e))?;
+
+    Ok(rustls::sign::CertifiedKey::new(certs, signing_key))
+}
+
+/// Load a certificate chain and private key from PEM strings
+fn load_certified_key_from_pem(
+    cert_pem: &str,
+    key_pem: &str,
+) -> anyhow::Result<rustls::sign::CertifiedKey> {
+    let mut cert_reader = BufReader::new(Cursor::new(cert_pem.as_bytes()));
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if certs.is_empty() {
+        anyhow::bail!("No certificates found in PEM data");
+    }
+
+    let mut key_reader = BufReader::new(Cursor::new(key_pem.as_bytes()));
+    let key = load_private_key(&mut key_reader)?;
     let signing_key = rustls::crypto::ring::sign::any_supported_type(&key)
         .map_err(|e| anyhow::anyhow!("Invalid private key: {:?}", e))?;
 

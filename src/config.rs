@@ -281,6 +281,10 @@ pub struct Config {
     #[serde(default)]
     pub ssl_session_resumption: Option<SslSessionResumption>,
 
+    /// Automatic Let's Encrypt certificate provisioning settings
+    #[serde(default)]
+    pub letsencrypt: LetsEncryptConfig,
+
     /// Global headers to set if empty
     #[serde(default, rename = "header.setifempty")]
     pub header_setifempty: HeaderValue,
@@ -368,6 +372,70 @@ fn default_proxy_timeout_io() -> u64 {
 
 fn default_proxy_timeout_keepalive() -> u64 {
     30000 // Reduced from 59s to 30s for security
+}
+
+/// Let's Encrypt / ACME certificate provisioning configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LetsEncryptConfig {
+    /// Enable automatic certificate provisioning and renewal
+    #[serde(default)]
+    pub enabled: OnOff,
+
+    /// ACME account contact URIs, for example "mailto:admin@example.com"
+    #[serde(default)]
+    pub contact: Vec<String>,
+
+    /// Directory used for ACME account credentials and issued certificates
+    #[serde(default = "default_letsencrypt_cache_dir")]
+    pub cache_dir: PathBuf,
+
+    /// Use Let's Encrypt staging environment
+    #[serde(default)]
+    pub staging: OnOff,
+
+    /// Override the ACME directory URL
+    #[serde(default)]
+    pub directory_url: Option<String>,
+
+    /// Required consent for ACME subscriber terms
+    #[serde(default)]
+    pub terms_of_service_agreed: OnOff,
+
+    /// Renew certificates this many days before expiry
+    #[serde(default = "default_letsencrypt_renew_before_days")]
+    pub renew_before_days: u64,
+
+    /// Background renewal check interval in seconds
+    #[serde(default = "default_letsencrypt_check_interval_seconds")]
+    pub check_interval_seconds: u64,
+}
+
+impl Default for LetsEncryptConfig {
+    fn default() -> Self {
+        Self {
+            enabled: OnOff::Off,
+            contact: Vec::new(),
+            cache_dir: default_letsencrypt_cache_dir(),
+            staging: OnOff::Off,
+            directory_url: None,
+            terms_of_service_agreed: OnOff::Off,
+            renew_before_days: default_letsencrypt_renew_before_days(),
+            check_interval_seconds: default_letsencrypt_check_interval_seconds(),
+        }
+    }
+}
+
+fn default_letsencrypt_cache_dir() -> PathBuf {
+    PathBuf::from("/var/lib/styx/letsencrypt")
+}
+
+fn default_letsencrypt_renew_before_days() -> u64 {
+    30
+}
+
+fn default_letsencrypt_check_interval_seconds() -> u64 {
+    12 * 60 * 60
 }
 
 /// ON/OFF toggle
@@ -502,9 +570,15 @@ pub struct SslConfig {
     #[serde(default)]
     pub dh_file: Option<PathBuf>,
 
-    pub certificate_file: PathBuf,
+    #[serde(default)]
+    pub certificate_file: Option<PathBuf>,
 
-    pub key_file: PathBuf,
+    #[serde(default)]
+    pub key_file: Option<PathBuf>,
+
+    /// Obtain and renew this host's certificate automatically via Let's Encrypt
+    #[serde(default)]
+    pub letsencrypt: OnOff,
 
     #[serde(default)]
     pub ocsp_update_interval: u64,
@@ -769,8 +843,9 @@ pub struct ResolvedListener {
 /// TLS configuration for a listener
 #[derive(Debug)]
 pub struct TlsListenerConfig {
-    pub cert_path: PathBuf,
-    pub key_path: PathBuf,
+    pub cert_path: Option<PathBuf>,
+    pub key_path: Option<PathBuf>,
+    pub letsencrypt: bool,
 }
 
 /// Resolved host configuration
@@ -1016,6 +1091,22 @@ impl Config {
                     if !seen_addrs.contains(&addr) {
                         seen_addrs.insert(addr);
                         let tls_config = if let Some(ssl) = &listen_config.ssl {
+                            if ssl.letsencrypt.is_on() && !self.letsencrypt.enabled.is_on() {
+                                anyhow::bail!(
+                                    "TLS listener for {} has ssl.letsencrypt ON but global letsencrypt.enabled is not ON",
+                                    host_name
+                                );
+                            }
+
+                            if !ssl.letsencrypt.is_on()
+                                && (ssl.certificate_file.is_none() || ssl.key_file.is_none())
+                            {
+                                anyhow::bail!(
+                                    "TLS listener for {} requires certificate-file and key-file unless ssl.letsencrypt is ON",
+                                    host_name
+                                );
+                            }
+
                             // Note: We currently ignore minimum_version as TlsManager uses a shared resolver
                             // Implementing per-listener TLS versions would require significant architectural changes
                             let _ = parse_tls_version(&ssl.minimum_version);
@@ -1027,6 +1118,7 @@ impl Config {
                             Some(Arc::new(TlsListenerConfig {
                                 cert_path: ssl.certificate_file.clone(),
                                 key_path: ssl.key_file.clone(),
+                                letsencrypt: ssl.letsencrypt.is_on(),
                             }))
                         } else {
                             None
@@ -1982,8 +2074,9 @@ hosts:
         assert!(listener.tls_config.is_some());
 
         let tls = listener.tls_config.as_ref().unwrap();
-        assert_eq!(tls.cert_path, PathBuf::from("/tls/cert.pem"));
-        assert_eq!(tls.key_path, PathBuf::from("/tls/key.pem"));
+        assert_eq!(tls.cert_path.as_ref().unwrap(), &PathBuf::from("/tls/cert.pem"));
+        assert_eq!(tls.key_path.as_ref().unwrap(), &PathBuf::from("/tls/key.pem"));
+        assert!(!tls.letsencrypt);
     }
 
     #[test]
@@ -2055,7 +2148,10 @@ key-file: /tls/key.pem
         assert!(ssl.cipher_suite.is_none());
         assert!(ssl.dh_file.is_none());
         assert_eq!(ssl.ocsp_update_interval, 0);
+        assert_eq!(ssl.certificate_file.as_ref().unwrap(), &PathBuf::from("/tls/cert.pem"));
+        assert_eq!(ssl.key_file.as_ref().unwrap(), &PathBuf::from("/tls/key.pem"));
         assert!(!ssl.sni_fallback.is_on()); // Secure by default
+        assert!(!ssl.letsencrypt.is_on());
     }
 
     #[test]
@@ -2076,6 +2172,8 @@ ocsp-update-interval: 3600
         assert_eq!(ssl.cipher_suite, Some("TLS_AES_256_GCM_SHA384".to_string()));
         assert_eq!(ssl.dh_file, Some(PathBuf::from("/tls/dhparams.pem")));
         assert_eq!(ssl.ocsp_update_interval, 3600);
+        assert_eq!(ssl.certificate_file.as_ref().unwrap(), &PathBuf::from("/tls/cert.pem"));
+        assert_eq!(ssl.key_file.as_ref().unwrap(), &PathBuf::from("/tls/key.pem"));
     }
 
     #[test]
@@ -2098,6 +2196,117 @@ sni-fallback: OFF
 "#;
         let ssl: SslConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(!ssl.sni_fallback.is_on());
+    }
+
+    #[test]
+    fn test_letsencrypt_config_defaults() {
+        let yaml = r#"
+hosts: {}
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert!(!config.letsencrypt.enabled.is_on());
+        assert_eq!(config.letsencrypt.cache_dir, PathBuf::from("/var/lib/styx/letsencrypt"));
+        assert_eq!(config.letsencrypt.renew_before_days, 30);
+        assert_eq!(config.letsencrypt.check_interval_seconds, 43200);
+    }
+
+    #[test]
+    fn test_letsencrypt_config_parse() {
+        let yaml = r#"
+letsencrypt:
+  enabled: ON
+  contact:
+    - mailto:admin@example.com
+  cache-dir: /tmp/styx-acme
+  staging: ON
+  terms-of-service-agreed: ON
+  renew-before-days: 14
+  check-interval-seconds: 3600
+hosts: {}
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert!(config.letsencrypt.enabled.is_on());
+        assert_eq!(config.letsencrypt.contact, vec!["mailto:admin@example.com"]);
+        assert_eq!(config.letsencrypt.cache_dir, PathBuf::from("/tmp/styx-acme"));
+        assert!(config.letsencrypt.staging.is_on());
+        assert!(config.letsencrypt.terms_of_service_agreed.is_on());
+        assert_eq!(config.letsencrypt.renew_before_days, 14);
+        assert_eq!(config.letsencrypt.check_interval_seconds, 3600);
+    }
+
+    #[test]
+    fn test_ssl_letsencrypt_without_manual_paths() {
+        let yaml = r#"
+letsencrypt: ON
+"#;
+        let ssl: SslConfig = serde_yaml::from_str(yaml).unwrap();
+
+        assert!(ssl.letsencrypt.is_on());
+        assert!(ssl.certificate_file.is_none());
+        assert!(ssl.key_file.is_none());
+    }
+
+    #[test]
+    fn test_resolve_letsencrypt_tls_listener_without_manual_paths() {
+        let yaml = r#"
+letsencrypt:
+  enabled: ON
+  terms-of-service-agreed: ON
+hosts:
+  "example.com:443":
+    listen:
+      host: 0.0.0.0
+      port: 443
+      ssl:
+        letsencrypt: ON
+    paths:
+      "/":
+        status: ON
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let resolved = config.resolve().unwrap();
+
+        let tls = resolved.listeners[0].tls_config.as_ref().unwrap();
+        assert!(tls.letsencrypt);
+        assert!(tls.cert_path.is_none());
+        assert!(tls.key_path.is_none());
+    }
+
+    #[test]
+    fn test_resolve_tls_listener_requires_paths_without_letsencrypt() {
+        let yaml = r#"
+hosts:
+  "example.com:443":
+    listen:
+      host: 0.0.0.0
+      port: 443
+      ssl: {}
+    paths:
+      "/":
+        status: ON
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.resolve().is_err());
+    }
+
+    #[test]
+    fn test_resolve_letsencrypt_host_requires_global_enablement() {
+        let yaml = r#"
+hosts:
+  "example.com:443":
+    listen:
+      host: 0.0.0.0
+      port: 443
+      ssl:
+        letsencrypt: ON
+    paths:
+      "/":
+        status: ON
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.resolve().is_err());
     }
 
     // =====================================================================

@@ -225,6 +225,48 @@ hosts:
         proxy.reverse.url: "http://backend-b:8080"
 ```
 
+### Automatic Let's Encrypt Certificates
+
+Enable ACME globally, then opt in per TLS host with `ssl.letsencrypt: ON`.
+styx serves HTTP-01 challenges internally from `/.well-known/acme-challenge/`,
+stores certificates under `cache-dir`, loads cached certificates on startup,
+and renews them before expiry.
+
+```yaml
+letsencrypt:
+  enabled: ON
+  contact:
+    - mailto:admin@example.com
+  cache-dir: /var/lib/styx/letsencrypt
+  terms-of-service-agreed: ON
+  staging: OFF
+  renew-before-days: 30
+  check-interval-seconds: 43200
+
+hosts:
+  "example.com:80":
+    listen:
+      port: 80
+    paths:
+      "/":
+        redirect: "https://example.com/"
+
+  "example.com:443":
+    listen:
+      port: 443
+      ssl:
+        letsencrypt: ON
+    paths:
+      "/":
+        proxy.reverse.url: "http://backend:8080"
+```
+
+`certificate-file` and `key-file` remain supported. When omitted for a
+Let's Encrypt host, styx writes to `cache-dir/live/<domain>/fullchain.pem`
+and `cache-dir/live/<domain>/privkey.pem`. If provisioning or renewal fails,
+the error is logged and styx keeps running with any currently loaded
+certificate.
+
 ### Transparent TLS Upgrade (TCP Proxy)
 
 Accept both plain and TLS connections on the same port for TCP proxy:
